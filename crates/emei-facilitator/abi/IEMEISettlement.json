@@ -1,0 +1,442 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "_mUSD",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_usdc",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_escrow",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "escrow",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getAccruedYield",
+    "inputs": [
+      {
+        "name": "payee",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getVaultBalance",
+    "inputs": [
+      {
+        "name": "payee",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "invoiceContract",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "mUSD",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setEscrow",
+    "inputs": [
+      {
+        "name": "_escrow",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setInvoiceContract",
+    "inputs": [
+      {
+        "name": "_invoiceContract",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setSlippageTolerance",
+    "inputs": [
+      {
+        "name": "bps",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setSwapRouter",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setVaultPreference",
+    "inputs": [
+      {
+        "name": "vault",
+        "type": "uint8",
+        "internalType": "enum IEMEISettlement.VaultType"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "settle",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "payee",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "asset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "proof",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "slippageBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "swapRouter",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "usdc",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "withdraw",
+    "inputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "SettlementExecuted",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "inputAsset",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "outputAsset",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "destinationVault",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IEMEISettlement.VaultType"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VaultDepositFailed",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VaultPreferenceSet",
+    "inputs": [
+      {
+        "name": "payee",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "vault",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IEMEISettlement.VaultType"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "WithdrawalExecuted",
+    "inputs": [
+      {
+        "name": "payee",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "vault",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IEMEISettlement.VaultType"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "InsufficientVaultBalance",
+    "inputs": [
+      {
+        "name": "payee",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "requested",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "available",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SwapFailed",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "received",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TransferFailed",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "from",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  }
+]

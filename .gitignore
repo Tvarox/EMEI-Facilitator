@@ -1,0 +1,32 @@
+# Build artifacts
+/target/
+crates/*/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Config with secrets
+config.json
+
+# Examples env files
+examples/*/.env
+
+.kiro/
+.config/

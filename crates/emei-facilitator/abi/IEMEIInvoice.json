@@ -1,0 +1,702 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "_bay8004",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_settlement",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_mandate",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "bay8004",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "collect",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "mandateId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "createInvoice",
+    "inputs": [
+      {
+        "name": "params",
+        "type": "tuple",
+        "internalType": "struct IEMEIInvoice.CreateInvoiceParams",
+        "components": [
+          {
+            "name": "payer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "asset",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "lineItems",
+            "type": "tuple[]",
+            "internalType": "struct IEMEIInvoice.LineItem[]",
+            "components": [
+              {
+                "name": "description",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "category",
+                "type": "string",
+                "internalType": "string"
+              }
+            ]
+          },
+          {
+            "name": "terms",
+            "type": "tuple",
+            "internalType": "struct IEMEIInvoice.Terms",
+            "components": [
+              {
+                "name": "termType",
+                "type": "uint8",
+                "internalType": "enum IEMEIInvoice.TermType"
+              },
+              {
+                "name": "netDays",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "milestones",
+                "type": "tuple[]",
+                "internalType": "struct IEMEIInvoice.Milestone[]",
+                "components": [
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "dueDate",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "description",
+                    "type": "string",
+                    "internalType": "string"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "collectionMode",
+            "type": "uint8",
+            "internalType": "enum IEMEIInvoice.CollectionMode"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getInvoice",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IEMEIInvoice.Invoice",
+        "components": [
+          {
+            "name": "invoiceId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "issuer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "payer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "asset",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "lineItems",
+            "type": "tuple[]",
+            "internalType": "struct IEMEIInvoice.LineItem[]",
+            "components": [
+              {
+                "name": "description",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "category",
+                "type": "string",
+                "internalType": "string"
+              }
+            ]
+          },
+          {
+            "name": "terms",
+            "type": "tuple",
+            "internalType": "struct IEMEIInvoice.Terms",
+            "components": [
+              {
+                "name": "termType",
+                "type": "uint8",
+                "internalType": "enum IEMEIInvoice.TermType"
+              },
+              {
+                "name": "netDays",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "milestones",
+                "type": "tuple[]",
+                "internalType": "struct IEMEIInvoice.Milestone[]",
+                "components": [
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "dueDate",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "description",
+                    "type": "string",
+                    "internalType": "string"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum IEMEIInvoice.Status"
+          },
+          {
+            "name": "collectionMode",
+            "type": "uint8",
+            "internalType": "enum IEMEIInvoice.CollectionMode"
+          },
+          {
+            "name": "settlementProof",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "receipt",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "presentedAt",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "createdAt",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getInvoiceCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "mandate",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "markOverdue",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "minReputation",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pay",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "present",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "reject",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMinReputation",
+    "inputs": [
+      {
+        "name": "threshold",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "settlement",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "InvoiceCreated",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "issuer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "collectionMode",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IEMEIInvoice.CollectionMode"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "InvoiceOverdue",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "InvoicePaid",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "settlementProof",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "InvoicePresented",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "presentedAt",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "InvoiceRejected",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "StatusChanged",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "previousStatus",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IEMEIInvoice.Status"
+      },
+      {
+        "name": "newStatus",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IEMEIInvoice.Status"
+      },
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AmountMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "actual",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidInvoiceParams",
+    "inputs": [
+      {
+        "name": "reason",
+        "type": "string",
+        "internalType": "string"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidStatusTransition",
+    "inputs": [
+      {
+        "name": "current",
+        "type": "uint8",
+        "internalType": "enum IEMEIInvoice.Status"
+      },
+      {
+        "name": "target",
+        "type": "uint8",
+        "internalType": "enum IEMEIInvoice.Status"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvoiceNotFound",
+    "inputs": [
+      {
+        "name": "invoiceId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MilestoneAmountMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "actual",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ReputationTooLow",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "score",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "threshold",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SettlementFailed",
+    "inputs": [
+      {
+        "name": "reason",
+        "type": "string",
+        "internalType": "string"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  }
+]
