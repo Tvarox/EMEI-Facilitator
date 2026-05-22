@@ -1,0 +1,245 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #ffffff;
+  --color-ink: #0a0a0a;
+  --color-accent: #ff5500;
+
+  --font-display: var(--font-press-start), monospace;
+  --font-mono: var(--font-vt323), monospace;
+  --font-chrome: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+:root {
+  --bg: #ffffff;
+  --ink: #0a0a0a;
+  --accent: #ff5500;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--ink);
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-vt323), ui-monospace, monospace;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+  font-smooth: never;
+  overflow-x: hidden;
+}
+
+body {
+  cursor: none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  body {
+    cursor: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    cursor: auto;
+  }
+}
+
+a,
+button {
+  cursor: none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  a,
+  button {
+    cursor: pointer;
+  }
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* ----- Background dot grid (fixed, full viewport) ----- */
+.dot-grid {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: radial-gradient(
+    circle,
+    var(--ink) 1px,
+    transparent 1px
+  );
+  background-size: 64px 64px;
+  background-position: 0 0;
+  opacity: 1;
+}
+
+.dot-spark {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  pointer-events: none;
+  display: block;
+}
+
+/* ----- Halftone fill ----- */
+.halftone {
+  background-image: radial-gradient(
+    circle,
+    var(--ink) 1px,
+    transparent 1.4px
+  );
+  background-size: 8px 8px;
+}
+
+/* ----- Bracket frame ----- */
+.frame-edge {
+  position: fixed;
+  background: var(--ink);
+  z-index: 40;
+  pointer-events: none;
+}
+
+/* ----- Hover invert (instant) ----- */
+.invert-hover {
+  display: inline-block;
+  padding: 6px 10px;
+  border: 2px solid var(--ink);
+  background: var(--bg);
+  color: var(--ink);
+  text-decoration: none;
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: none;
+}
+
+.invert-hover:hover,
+.invert-hover:focus-visible {
+  background: var(--ink);
+  color: var(--bg);
+  outline: none;
+}
+
+/* ----- Block shadow utility ----- */
+.block-shadow {
+  box-shadow: 6px 6px 0 0 var(--ink);
+}
+
+.block-shadow-accent {
+  box-shadow: 6px 6px 0 0 var(--accent);
+}
+
+/* ----- Cursor blink (steps) ----- */
+@keyframes blink-step {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.blink {
+  animation: blink-step 1s steps(2, end) infinite;
+}
+
+.blink-slow {
+  animation: blink-step 1.4s steps(2, end) infinite;
+}
+
+/* ----- Section reveal ----- */
+.reveal {
+  opacity: 0;
+  transform: translate3d(0, 16px, 0);
+}
+
+.reveal.in {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+  animation: reveal-step 120ms steps(4, end) forwards;
+}
+
+@keyframes reveal-step {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* ----- Section margin label (vertical) ----- */
+.section-label {
+  position: absolute;
+  left: 32px;
+  top: 32px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.7;
+  z-index: 10;
+}
+
+@media (max-width: 900px) {
+  .section-label {
+    left: 12px;
+    top: 16px;
+    font-size: 10px;
+  }
+}
+
+/* ----- Chrome positioning (mobile tightening) ----- */
+.chrome-tl {
+  top: 32px;
+  left: 64px;
+}
+.chrome-bl {
+  bottom: 36px;
+  left: 64px;
+}
+@media (max-width: 900px) {
+  .chrome-tl {
+    top: 18px;
+    left: 24px;
+  }
+  .chrome-bl {
+    bottom: 18px;
+    left: 24px;
+  }
+}
+
+/* ----- Reduced motion ----- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
