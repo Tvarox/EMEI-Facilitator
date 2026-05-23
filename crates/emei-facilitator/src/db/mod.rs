@@ -107,6 +107,190 @@ impl StatementStore {
             .map_err(|e| EmeiError::Database(format!("query_statement failed: {e}")))
     }
 
+    // ─── Persistent receipt queue ─────────────────────────────────────────────
+
+    /// Persist a receipt hash to the DB-backed queue.
+    pub async fn insert_pending_receipt(
+        &self,
+        receipt_hash: &[u8; 32],
+        invoice_id: Option<u64>,
+    ) -> Result<(), EmeiError> {
+        let hash = *receipt_hash;
+        let inv_id = invoice_id;
+        self.conn
+            .call(move |conn| {
+                queries::insert_pending_receipt(conn, &hash, inv_id)?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("insert_pending_receipt failed: {e}")))
+    }
+
+    /// Drain up to `max_count` receipts from the persistent queue.
+    pub async fn drain_pending_receipts(
+        &self,
+        max_count: usize,
+    ) -> Result<Vec<[u8; 32]>, EmeiError> {
+        self.conn
+            .call(move |conn| {
+                let results = queries::drain_pending_receipts(conn, max_count)?;
+                Ok(results)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("drain_pending_receipts failed: {e}")))
+    }
+
+    /// Count pending receipts.
+    pub async fn count_pending_receipts(&self) -> Result<usize, EmeiError> {
+        self.conn
+            .call(|conn| {
+                let count = queries::count_pending_receipts(conn)?;
+                Ok(count)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("count_pending_receipts failed: {e}")))
+    }
+
+    // ─── Pending transaction tracking ─────────────────────────────────────────
+
+    /// Record a submitted transaction.
+    pub async fn insert_pending_tx(
+        &self,
+        tx_hash: &str,
+        sender: &str,
+        nonce: u64,
+    ) -> Result<(), EmeiError> {
+        let hash = tx_hash.to_string();
+        let snd = sender.to_string();
+        self.conn
+            .call(move |conn| {
+                queries::insert_pending_tx(conn, &hash, &snd, nonce)?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("insert_pending_tx failed: {e}")))
+    }
+
+    /// Mark a transaction as confirmed.
+    pub async fn confirm_pending_tx(&self, tx_hash: &str) -> Result<(), EmeiError> {
+        let hash = tx_hash.to_string();
+        self.conn
+            .call(move |conn| {
+                queries::confirm_pending_tx(conn, &hash)?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("confirm_pending_tx failed: {e}")))
+    }
+
+    /// Get stale pending transactions (older than `age_secs`).
+    pub async fn get_stale_pending_txs(
+        &self,
+        age_secs: u64,
+    ) -> Result<Vec<(String, String, u64)>, EmeiError> {
+        self.conn
+            .call(move |conn| {
+                let results = queries::get_stale_pending_txs(conn, age_secs)?;
+                Ok(results)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("get_stale_pending_txs failed: {e}")))
+    }
+
+    // ─── Public dashboard queries ────────────────────────────────────────────
+
+    /// Count events grouped by event_type.
+    pub async fn count_events_by_type(&self) -> Result<Vec<(String, i64)>, EmeiError> {
+        self.conn
+            .call(|conn| {
+                let results = queries::count_events_by_type(conn)?;
+                Ok(results)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("count_events_by_type failed: {e}")))
+    }
+
+    /// Sum the amount (wei) for a given event type.
+    pub async fn sum_amount_for_type(&self, event_type: &str) -> Result<u128, EmeiError> {
+        let et = event_type.to_string();
+        self.conn
+            .call(move |conn| {
+                let result = queries::sum_amount_for_type(conn, &et)?;
+                Ok(result)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("sum_amount_for_type failed: {e}")))
+    }
+
+    /// Fetch recent events with optional cursor-based pagination.
+    pub async fn recent_events(
+        &self,
+        limit: i64,
+        before_block: Option<i64>,
+    ) -> Result<Vec<IndexedEvent>, EmeiError> {
+        self.conn
+            .call(move |conn| {
+                let results = queries::recent_events(conn, limit, before_block)?;
+                Ok(results)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("recent_events failed: {e}")))
+    }
+
+    /// Get the latest MerkleRootPosted event.
+    pub async fn latest_receipt_event(&self) -> Result<Option<(String, i64)>, EmeiError> {
+        self.conn
+            .call(|conn| {
+                let result = queries::latest_receipt_event(conn)?;
+                Ok(result)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("latest_receipt_event failed: {e}")))
+    }
+
+    /// Count events for a specific issuer.
+    pub async fn count_events_for_issuer(
+        &self,
+        issuer: &str,
+    ) -> Result<Vec<(String, i64)>, EmeiError> {
+        let addr = issuer.to_string();
+        self.conn
+            .call(move |conn| {
+                let results = queries::count_events_for_issuer(conn, &addr)?;
+                Ok(results)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("count_events_for_issuer failed: {e}")))
+    }
+
+    /// Count events for a specific payer.
+    pub async fn count_events_for_payer(
+        &self,
+        payer: &str,
+    ) -> Result<Vec<(String, i64)>, EmeiError> {
+        let addr = payer.to_string();
+        self.conn
+            .call(move |conn| {
+                let results = queries::count_events_for_payer(conn, &addr)?;
+                Ok(results)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("count_events_for_payer failed: {e}")))
+    }
+
+    /// Get the latest block number from the events table.
+    pub async fn latest_block(&self) -> Result<Option<i64>, EmeiError> {
+        self.conn
+            .call(|conn| {
+                let result = queries::latest_block(conn)?;
+                Ok(result)
+            })
+            .await
+            .map_err(|e| EmeiError::Database(format!("latest_block failed: {e}")))
+    }
+
+    // ─── Indexer state ────────────────────────────────────────────────────────
+
     /// Get the last indexed block number, or None if no blocks have been indexed.
     pub async fn get_last_block(&self) -> Result<Option<u64>, EmeiError> {
         self.conn

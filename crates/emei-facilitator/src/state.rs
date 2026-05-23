@@ -6,8 +6,11 @@ use tokio_util::sync::CancellationToken;
 use crate::chain::ChainClient;
 use crate::config::EmeiConfig;
 use crate::db::StatementStore;
+use crate::nonce::NonceManager;
 
 /// In-memory queue for pending settlement receipts awaiting Merkle batching.
+/// Note: In production, receipts are ALSO persisted to DB via `insert_pending_receipt`.
+/// This in-memory queue is used as a fast path; the DB is the durable backup.
 pub struct ReceiptQueue {
     inner: Mutex<Vec<[u8; 32]>>,
 }
@@ -47,10 +50,14 @@ pub struct AppState {
     pub chain: Arc<dyn ChainClient>,
     /// SQLite event store for statement queries
     pub db: StatementStore,
-    /// In-memory receipt queue for batching
+    /// In-memory receipt queue for batching (fast path)
     pub receipt_queue: ReceiptQueue,
+    /// Nonce manager for serializing transaction submissions
+    pub nonce_manager: NonceManager,
     /// Loaded configuration
     pub config: EmeiConfig,
     /// Cancellation token for graceful shutdown
     pub cancel: CancellationToken,
+    /// Server start time for uptime reporting
+    pub started_at: std::time::Instant,
 }

@@ -28,4 +28,21 @@ CREATE TABLE IF NOT EXISTS indexer_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_hash BLOB NOT NULL,
+    invoice_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pending_txs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tx_hash TEXT NOT NULL UNIQUE,
+    sender TEXT NOT NULL,
+    nonce INTEGER NOT NULL,
+    submitted_at INTEGER NOT NULL,
+    confirmed_at INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending'
+);
 "#;

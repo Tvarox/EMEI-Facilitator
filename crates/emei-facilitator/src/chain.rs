@@ -3,13 +3,13 @@
 /// Enables mocking for tests while providing a real alloy-rs
 /// implementation for production use.
 use alloy_network::{Ethereum, EthereumWallet, TransactionBuilder};
-use alloy_primitives::{Address, B256, Bytes};
+use alloy_primitives::{Address, Bytes, B256};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest;
 
-use crate::error::{EmeiError, decode_revert};
+use crate::error::{decode_revert, EmeiError};
 
 #[async_trait::async_trait]
 pub trait ChainClient: Send + Sync + 'static {
@@ -136,7 +136,7 @@ impl ChainClient for AlloyChainClient {
             .with_input(calldata);
 
         let result =
-            tokio::time::timeout(std::time::Duration::from_secs(15), self.provider.call(tx)).await;
+            tokio::time::timeout(std::time::Duration::from_secs(30), self.provider.call(tx)).await;
 
         match result {
             Ok(Ok(bytes)) => Ok(bytes),
