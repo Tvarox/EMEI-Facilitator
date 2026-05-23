@@ -1,0 +1,21 @@
+{
+  "name": "emei-demo-agents",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "seed": "node dist/seed.js",
+    "trader": "node dist/trader-bot.js",
+    "signal": "node dist/signal-bot.js",
+    "start": "node dist/signal-bot.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

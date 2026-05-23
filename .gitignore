@@ -30,3 +30,6 @@ examples/*/.env
 
 .kiro/
 .config/
+
+
+docs
