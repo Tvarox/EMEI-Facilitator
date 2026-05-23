@@ -15,12 +15,25 @@ import { SIGNAL_BOT_PK, MOCK_MUSD_ADDR, signalBotAccount, traderBotAccount, faci
 // Track the highest known invoice ID so we can find new ones
 let lastKnownId = parseInt(process.env.INVOICE_START_ID ?? "0");
 /**
- * Probe invoice IDs starting from lastKnownId+1 to find the one we just created.
- * Returns the ID if found, or null if not.
+ * Probe invoice IDs to find the one we just created.
+ * Strategy: query getInvoiceCount from the facilitator, then check the last few.
  */
 async function discoverNewInvoiceId() {
-    // Try up to 10 IDs ahead
-    for (let id = lastKnownId + 1; id <= lastKnownId + 10; id++) {
+    // First, try to get the total invoice count from the chain
+    // by probing IDs from lastKnownId+1 upward AND from the high end
+    const probeIds = [];
+    // Probe forward from last known
+    for (let id = lastKnownId + 1; id <= lastKnownId + 5; id++) {
+        probeIds.push(id);
+    }
+    // Also probe high IDs (in case we're far behind)
+    // Try to find the latest by binary-search-style probing
+    for (let id = lastKnownId + 10; id <= lastKnownId + 50; id += 5) {
+        probeIds.push(id);
+    }
+    // Deduplicate and sort descending (check newest first)
+    const uniqueIds = [...new Set(probeIds)].sort((a, b) => b - a);
+    for (const id of uniqueIds) {
         try {
             const invoice = await facilitatorGet(`/emei/invoice/${id}`);
             const issuer = (invoice.issuer ?? "").toLowerCase();
@@ -31,8 +44,8 @@ async function discoverNewInvoiceId() {
             }
         }
         catch {
-            // Invoice doesn't exist yet, stop probing
-            break;
+            // Invoice doesn't exist, skip
+            continue;
         }
     }
     return null;
