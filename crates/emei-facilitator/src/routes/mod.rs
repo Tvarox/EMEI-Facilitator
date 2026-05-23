@@ -5,16 +5,18 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
     routing::{delete, get, post},
+    Router,
 };
 
 use crate::state::AppState;
 
+pub mod health;
 pub mod identity;
 pub mod invoice;
 pub mod mandate;
 pub mod paylink;
+pub mod public;
 pub mod query;
 pub mod receipt;
 pub mod withdraw;
@@ -45,4 +47,8 @@ pub fn emei_routes() -> Router<Arc<AppState>> {
         .route("/emei/withdraw", post(withdraw::withdraw_funds))
         // Pay-link (present-and-pay fallback)
         .route("/emei/paylink/{id}", get(paylink::get_paylink))
+        // Public dashboard endpoints (read-only, no auth)
+        .nest("/emei/public", public::router())
+        // Health check
+        .route("/health", get(health::health_check))
 }

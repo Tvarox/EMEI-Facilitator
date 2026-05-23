@@ -8,6 +8,7 @@ pub mod contracts;
 pub mod db;
 pub mod error;
 pub mod merkle;
+pub mod nonce;
 pub mod routes;
 pub mod services;
 pub mod signing;

@@ -60,8 +60,10 @@ async fn main() {
         chain: Arc::new(chain),
         db,
         receipt_queue: ReceiptQueue::new(),
+        nonce_manager: emei_facilitator::nonce::NonceManager::new(),
         config,
         cancel: CancellationToken::new(),
+        started_at: std::time::Instant::now(),
     });
 
     // Start background services
