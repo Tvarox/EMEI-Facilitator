@@ -1,0 +1,48 @@
+# Combined Dockerfile: Facilitator (Rust) + Signal Bot (Node.js)
+# Runs both in a single container for Render free tier.
+
+# ─── Stage 1: Build Rust binary ──────────────────────────────────────────────
+FROM rust:1.88-bookworm AS rust-builder
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin emei-server -p emei-facilitator
+
+# ─── Stage 2: Build Node.js bot ──────────────────────────────────────────────
+FROM node:20-slim AS node-builder
+
+WORKDIR /app
+COPY examples/demo-agents/package.json examples/demo-agents/tsconfig.json ./
+RUN npm install
+COPY examples/demo-agents/src/ src/
+RUN npx tsc
+
+# ─── Stage 3: Combined runtime ──────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 (minimal)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy Rust binary
+COPY --from=rust-builder /app/target/release/emei-server /usr/local/bin/emei-server
+
+# Copy Node.js bot
+COPY --from=node-builder /app/dist /opt/signal-bot/dist
+COPY --from=node-builder /app/node_modules /opt/signal-bot/node_modules
+
+# Copy entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV RUST_LOG=emei_facilitator=info
+EXPOSE 8080
+
+CMD ["/entrypoint.sh"]
