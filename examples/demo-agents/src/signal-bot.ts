@@ -122,23 +122,6 @@ async function issueInvoice(): Promise<void> {
       SIGNAL_BOT_PK
     );
     log("signal-bot", `  Presented! tx=${(presentResult as any).tx_hash}`);
-
-    // Wait for present tx to confirm
-    await sleep(8000);
-
-    // Collect via mandate (this is what the Auto-Collector would do)
-    const mandateId = parseInt(process.env.MANDATE_ID ?? "1");
-    log("signal-bot", `  Collecting via mandate #${mandateId}...`);
-    try {
-      const collectResult = await facilitatorPost(
-        "/emei/collect",
-        { invoice_id: invoiceId, mandate_id: mandateId },
-        SIGNAL_BOT_PK // collect endpoint uses hot wallet, key doesn't matter for auth
-      );
-      log("signal-bot", `  Collected! tx=${(collectResult as any).tx_hash}`);
-    } catch (ce: any) {
-      log("signal-bot", `  Collect failed: ${ce.message}`);
-    }
   } catch (e: any) {
     log("signal-bot", `  Present failed: ${e.message}`);
   }
