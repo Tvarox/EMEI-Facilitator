@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  facilitator:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    env_file: ../../crates/emei-facilitator/.env
+    environment:
+      - DEMO_AGENTS=${DEMO_AGENTS:-}
+      - EMEI_SQLITE_PATH=/data/emei.db
+    ports:
+      - "8080:8080"
+    volumes:
+      - demo-data:/data
+
+  seed:
+    build: .
+    command: ["node", "dist/seed.js"]
+    env_file: .env
+    depends_on:
+      - facilitator
+    restart: "no"
+
+  trader-bot:
+    build: .
+    command: ["node", "dist/trader-bot.js"]
+    env_file: .env
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    restart: "on-failure"
+
+  signal-bot:
+    build: .
+    command: ["node", "dist/signal-bot.js"]
+    env_file: .env
+    depends_on:
+      trader-bot:
+        condition: service_completed_successfully
+    restart: "always"
+
+volumes:
+  demo-data:
