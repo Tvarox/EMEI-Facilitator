@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 use axum::{
     extract::{Query, State},
@@ -15,7 +15,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    contracts::{bay8004::IBay8004, settlement::IEMEISettlement},
+    contracts::{bay8004::IBay8004, mandate::IEMEIMandate, settlement::IEMEISettlement},
     error::EmeiError,
     state::AppState,
 };
@@ -26,6 +26,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/stats", get(get_stats))
         .route("/events", get(get_events))
         .route("/agents", get(get_agents))
+        .route("/mandates", get(get_mandates))
 }
 
 // ─── Response types ──────────────────────────────────────────────────────────
@@ -91,6 +92,26 @@ pub struct AgentInfo {
     pub invoices_paid_to_them: i64,
     pub invoices_paid_by_them: i64,
     pub active_mandates: i64,
+}
+
+#[derive(Serialize)]
+pub struct MandatesResponse {
+    pub mandates: Vec<MandateInfo>,
+}
+
+#[derive(Serialize)]
+pub struct MandateInfo {
+    pub mandate_id: u64,
+    pub payer: String,
+    pub payer_label: String,
+    pub spend_cap_musd: String,
+    pub remaining_cap_musd: String,
+    pub spent_musd: String,
+    pub approved_counterparties: Vec<String>,
+    pub approved_categories: Vec<String>,
+    pub valid_from: u64,
+    pub valid_until: u64,
+    pub status: String,
 }
 
 // ─── Query params ────────────────────────────────────────────────────────────
@@ -287,6 +308,102 @@ pub async fn get_agents(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/// GET /emei/public/mandates — Active mandates with real-time cap usage.
+pub async fn get_mandates(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MandatesResponse>, EmeiError> {
+    let agents = parse_demo_agents();
+    let mut mandates = Vec::new();
+
+    // For each known agent (as payer), query their mandates
+    for (label, address) in &agents {
+        let addr: Address = match address.parse() {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+
+        // Get mandate IDs for this payer
+        let calldata = IEMEIMandate::getMandatesByPayerCall { payer: addr }.abi_encode();
+        let result = match state
+            .chain
+            .call(state.config.mandate_address, calldata.into())
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let mandate_ids = match IEMEIMandate::getMandatesByPayerCall::abi_decode_returns(&result) {
+            Ok(ids) => ids,
+            Err(_) => continue,
+        };
+
+        for mandate_id_u256 in mandate_ids.iter() {
+            let mandate_id: u64 = (*mandate_id_u256).try_into().unwrap_or(0);
+            if mandate_id == 0 {
+                continue;
+            }
+
+            // Fetch mandate details
+            let m_calldata = IEMEIMandate::getMandateCall {
+                mandateId: U256::from(mandate_id),
+            }
+            .abi_encode();
+
+            let m_result = match state
+                .chain
+                .call(state.config.mandate_address, m_calldata.into())
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let mandate = match IEMEIMandate::getMandateCall::abi_decode_returns(&m_result) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let spend_cap_wei: u128 = mandate.spendCap.try_into().unwrap_or(0);
+            let remaining_wei: u128 = mandate.remainingCap.try_into().unwrap_or(0);
+            let spent_wei = spend_cap_wei.saturating_sub(remaining_wei);
+
+            let status_str = match mandate.status {
+                0 => "active",
+                1 => "revoked",
+                _ => "unknown",
+            };
+
+            let counterparties: Vec<String> = mandate
+                .approvedCounterparties
+                .iter()
+                .map(|a| format!("0x{}", hex::encode(a)))
+                .collect();
+
+            let valid_from: u64 = mandate.validFrom.try_into().unwrap_or(0);
+            let valid_until: u64 = mandate.validUntil.try_into().unwrap_or(0);
+
+            mandates.push(MandateInfo {
+                mandate_id,
+                payer: address.clone(),
+                payer_label: label.clone(),
+                spend_cap_musd: wei_to_musd_string(spend_cap_wei),
+                remaining_cap_musd: wei_to_musd_string(remaining_wei),
+                spent_musd: wei_to_musd_string(spent_wei),
+                approved_counterparties: counterparties,
+                approved_categories: mandate.approvedCategories.clone(),
+                valid_from,
+                valid_until,
+                status: status_str.to_string(),
+            });
+        }
+    }
+
+    Ok(Json(MandatesResponse { mandates }))
+}
+
+// ─── Helpers (internal) ──────────────────────────────────────────────────────
+
 /// Convert wei (u128) to a human-readable mUSD string with 2 decimal places.
 fn wei_to_musd_string(wei: u128) -> String {
     let whole = wei / 1_000_000_000_000_000_000;
@@ -295,7 +412,7 @@ fn wei_to_musd_string(wei: u128) -> String {
 }
 
 /// Parse the DEMO_AGENTS env var (format: "name:0xaddr,name2:0xaddr2").
-/// Falls back to an empty list if unset.
+/// Falls back to an empty list if unset. Lowercases addresses for DB matching.
 fn parse_demo_agents() -> Vec<(String, String)> {
     let raw = std::env::var("DEMO_AGENTS").unwrap_or_default();
     if raw.is_empty() {
@@ -305,7 +422,7 @@ fn parse_demo_agents() -> Vec<(String, String)> {
         .filter_map(|entry| {
             let parts: Vec<&str> = entry.trim().splitn(2, ':').collect();
             if parts.len() == 2 {
-                Some((parts[0].to_string(), parts[1].to_string()))
+                Some((parts[0].to_string(), parts[1].to_lowercase()))
             } else {
                 None
             }
