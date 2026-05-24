@@ -11,6 +11,7 @@ use alloy_primitives::U256;
 use alloy_sol_types::SolCall;
 use tokio_util::sync::CancellationToken;
 
+use crate::contracts::bay8004::IBay8004;
 use crate::contracts::invoice::IEMEIInvoice;
 use crate::contracts::mandate::IEMEIMandate;
 use crate::error::EmeiError;
@@ -146,6 +147,18 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                         let hash_bytes: [u8; 32] = receipt_hash.into();
                         let _ = state.db.insert_pending_receipt(&hash_bytes, Some(id)).await;
                         state.receipt_queue.push(hash_bytes).await;
+
+                        // Positive reputation feedback for payer (paid on time)
+                        let feedback_calldata = IBay8004::giveFeedbackCall {
+                            subject: invoice.payer,
+                            invoiceId: U256::from(id),
+                            amount: invoice.amount,
+                        }
+                        .abi_encode();
+                        let _ = state
+                            .chain
+                            .send_hot(state.config.bay8004_address, feedback_calldata.into())
+                            .await;
                     }
                     Err(e) => {
                         tracing::warn!(

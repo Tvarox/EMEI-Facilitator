@@ -8,14 +8,16 @@
     "seed": "node dist/seed.js",
     "trader": "node dist/trader-bot.js",
     "signal": "node dist/signal-bot.js",
+    "compute": "node dist/compute-bot.js",
+    "analytics": "node dist/analytics-bot.js",
     "start": "node dist/signal-bot.js"
   },
   "dependencies": {
-    "dotenv": "^17.4.2",
+    "dotenv": "^16.4.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
   }
 }
