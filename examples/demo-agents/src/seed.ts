@@ -1,13 +1,18 @@
 /**
- * seed.ts — One-shot funding and registration script.
+ * seed.ts — One-shot funding and registration script for all agents.
  *
- * 1. Mints mUSD to trader-bot (funds the mandate)
- * 2. Mints a small amount to signal-bot (not strictly needed)
- * 3. Registers both identities in ERC-8004 with score=500
- * 4. Approves the Settlement contract to spend trader-bot's mUSD
+ * 1. Mints mUSD to payers (trader-bot, research-bot)
+ * 2. Registers all 5 identities in ERC-8004
+ * 3. Approves Settlement contract for payers
+ * 4. Creates mandates:
+ *    - trader-bot → signal-bot: 1000 mUSD, category "data-signal"
+ *    - trader-bot → compute-bot: 30 mUSD, category "compute" (will exhaust!)
+ *    - research-bot → analytics-bot: 500 mUSD, category "analytics"
  */
 
+import "dotenv/config";
 import { parseEther, formatEther } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import {
   MOCK_MUSD_ADDR,
   MOCK_MUSD_ABI,
@@ -18,6 +23,7 @@ import {
   publicClient,
   walletClient,
   facilitatorPost,
+  sleep,
   log,
   env,
 } from "./shared.js";
@@ -27,100 +33,130 @@ const SETTLEMENT_ADDR = env(
   "0xfdCb7bA077069A7Da44711Ee6bdB49174AFA4dD0"
 ) as `0x${string}`;
 
-async function main() {
-  log("seed", `Signal bot: ${signalBotAccount.address}`);
-  log("seed", `Trader bot: ${traderBotAccount.address}`);
-  log("seed", `mUSD token: ${MOCK_MUSD_ADDR}`);
+// New agents
+const COMPUTE_BOT_PK = env("COMPUTE_BOT_PK", "") as `0x${string}`;
+const ANALYTICS_BOT_PK = env("ANALYTICS_BOT_PK", "") as `0x${string}`;
+const RESEARCH_BOT_PK = env("RESEARCH_BOT_PK", "") as `0x${string}`;
 
-  const traderWallet = walletClient(TRADER_BOT_PK);
-  const signalWallet = walletClient(SIGNAL_BOT_PK);
+const computeBot = COMPUTE_BOT_PK ? privateKeyToAccount(COMPUTE_BOT_PK) : null;
+const analyticsBot = ANALYTICS_BOT_PK ? privateKeyToAccount(ANALYTICS_BOT_PK) : null;
+const researchBot = RESEARCH_BOT_PK ? privateKeyToAccount(RESEARCH_BOT_PK) : null;
 
-  // 1. Mint mUSD to trader-bot (1000 tokens)
-  log("seed", "Minting 1000 mUSD to trader-bot...");
-  const mintTxTrader = await traderWallet.writeContract({
+async function mintAndWait(pk: `0x${string}`, to: `0x${string}`, amount: bigint, label: string) {
+  const wallet = walletClient(pk);
+  log("seed", `Minting ${formatEther(amount)} mUSD to ${label}...`);
+  const tx = await wallet.writeContract({
     address: MOCK_MUSD_ADDR,
     abi: MOCK_MUSD_ABI,
     functionName: "mint",
-    args: [traderBotAccount.address, parseEther("1000")],
+    args: [to, amount],
   });
-  log("seed", `  tx: ${mintTxTrader}`);
-  log("seed", "  Waiting for confirmation...");
-  await publicClient.waitForTransactionReceipt({ hash: mintTxTrader });
+  log("seed", `  tx: ${tx}`);
+  await publicClient.waitForTransactionReceipt({ hash: tx });
+}
 
-  // 2. Mint mUSD to signal-bot (100 tokens — for receiving payments)
-  log("seed", "Minting 100 mUSD to signal-bot...");
-  const mintTxSignal = await signalWallet.writeContract({
-    address: MOCK_MUSD_ADDR,
-    abi: MOCK_MUSD_ABI,
-    functionName: "mint",
-    args: [signalBotAccount.address, parseEther("100")],
-  });
-  log("seed", `  tx: ${mintTxSignal}`);
-  log("seed", "  Waiting for confirmation...");
-  await publicClient.waitForTransactionReceipt({ hash: mintTxSignal });
-
-  // 3. Approve Settlement contract to spend trader-bot's mUSD
-  log("seed", "Approving Settlement to spend trader-bot's mUSD...");
-  const approveTx = await traderWallet.writeContract({
+async function approveAndWait(pk: `0x${string}`, label: string) {
+  const wallet = walletClient(pk);
+  log("seed", `Approving Settlement for ${label}...`);
+  const tx = await wallet.writeContract({
     address: MOCK_MUSD_ADDR,
     abi: MOCK_MUSD_ABI,
     functionName: "approve",
-    args: [SETTLEMENT_ADDR, parseEther("1000000")], // large allowance
+    args: [SETTLEMENT_ADDR, parseEther("1000000")],
   });
-  log("seed", `  tx: ${approveTx}`);
-  log("seed", "  Waiting for confirmation...");
-  await publicClient.waitForTransactionReceipt({ hash: approveTx });
+  log("seed", `  tx: ${tx}`);
+  await publicClient.waitForTransactionReceipt({ hash: tx });
+}
 
-  // 4. Register both identities
-  log("seed", "Registering signal-bot identity (score=500)...");
+async function registerAgent(pk: `0x${string}`, label: string) {
+  log("seed", `Registering ${label} (score=500)...`);
   try {
-    const regSignal = await facilitatorPost(
-      "/emei/register",
-      { initial_score: 500 },
-      SIGNAL_BOT_PK
-    );
-    log("seed", `  tx: ${(regSignal as any).tx_hash}`);
+    const result = await facilitatorPost("/emei/register", { initial_score: 500 }, pk);
+    log("seed", `  tx: ${(result as any).tx_hash}`);
   } catch (e: any) {
     if (e.message.includes("AlreadyRegistered")) {
-      log("seed", "  Already registered, skipping.");
+      log("seed", `  Already registered, skipping.`);
     } else {
       throw e;
     }
   }
+}
 
-  log("seed", "Registering trader-bot identity (score=500)...");
-  try {
-    const regTrader = await facilitatorPost(
-      "/emei/register",
-      { initial_score: 500 },
-      TRADER_BOT_PK
-    );
-    log("seed", `  tx: ${(regTrader as any).tx_hash}`);
-  } catch (e: any) {
-    if (e.message.includes("AlreadyRegistered")) {
-      log("seed", "  Already registered, skipping.");
-    } else {
-      throw e;
-    }
+async function createMandate(
+  payerPk: `0x${string}`,
+  payerLabel: string,
+  counterparty: `0x${string}`,
+  cap: string,
+  categories: string[],
+) {
+  const now = Math.floor(Date.now() / 1000);
+  log("seed", `Creating mandate: ${payerLabel} → ${counterparty.slice(0, 10)}... (cap: ${cap} mUSD, categories: ${categories.join(",")})`);
+  const result = await facilitatorPost(
+    "/emei/mandate",
+    {
+      spend_cap: parseEther(cap).toString(),
+      approved_counterparties: [counterparty],
+      approved_categories: categories,
+      valid_from: now,
+      valid_until: now + 30 * 24 * 60 * 60, // 30 days
+    },
+    payerPk
+  );
+  log("seed", `  tx: ${(result as any).tx_hash}`);
+}
+
+async function main() {
+  log("seed", "=== EMEI Multi-Agent Seed ===");
+  log("seed", `Signal bot:    ${signalBotAccount.address}`);
+  log("seed", `Trader bot:    ${traderBotAccount.address}`);
+  if (computeBot) log("seed", `Compute bot:   ${computeBot.address}`);
+  if (analyticsBot) log("seed", `Analytics bot: ${analyticsBot.address}`);
+  if (researchBot) log("seed", `Research bot:  ${researchBot.address}`);
+  log("seed", "");
+
+  // 1. Mint mUSD to payers
+  await mintAndWait(TRADER_BOT_PK, traderBotAccount.address, parseEther("2000"), "trader-bot");
+  if (researchBot) {
+    await mintAndWait(RESEARCH_BOT_PK, researchBot.address, parseEther("1000"), "research-bot");
   }
 
-  // 5. Print balances
-  const traderBal = await publicClient.readContract({
-    address: MOCK_MUSD_ADDR,
-    abi: MOCK_MUSD_ABI,
-    functionName: "balanceOf",
-    args: [traderBotAccount.address],
-  });
-  const signalBal = await publicClient.readContract({
-    address: MOCK_MUSD_ADDR,
-    abi: MOCK_MUSD_ABI,
-    functionName: "balanceOf",
-    args: [signalBotAccount.address],
-  });
+  // 2. Approve Settlement for payers
+  await approveAndWait(TRADER_BOT_PK, "trader-bot");
+  if (researchBot) {
+    await approveAndWait(RESEARCH_BOT_PK, "research-bot");
+  }
 
-  log("seed", `Trader-bot mUSD balance: ${formatEther(traderBal)}`);
-  log("seed", `Signal-bot mUSD balance: ${formatEther(signalBal)}`);
-  log("seed", "Done! Bots are funded and registered.");
+  // 3. Register all agents
+  await registerAgent(SIGNAL_BOT_PK, "signal-bot");
+  await registerAgent(TRADER_BOT_PK, "trader-bot");
+  if (computeBot) await registerAgent(COMPUTE_BOT_PK, "compute-bot");
+  if (analyticsBot) await registerAgent(ANALYTICS_BOT_PK, "analytics-bot");
+  if (researchBot) await registerAgent(RESEARCH_BOT_PK, "research-bot");
+
+  // 4. Create mandates (with waits between same-sender txs)
+  // trader-bot → signal-bot: 1000 mUSD for data-signal (happy path)
+  await createMandate(TRADER_BOT_PK, "trader-bot", signalBotAccount.address, "1000", ["data-signal"]);
+  log("seed", "  Waiting for tx confirmation...");
+  await sleep(12000);
+
+  // trader-bot → compute-bot: 30 mUSD for compute (will exhaust after 6 invoices!)
+  if (computeBot) {
+    await createMandate(TRADER_BOT_PK, "trader-bot", computeBot.address, "30", ["compute"]);
+    log("seed", "  Waiting for tx confirmation...");
+    await sleep(12000);
+  }
+
+  // research-bot → analytics-bot: 500 mUSD for analytics (happy path)
+  if (analyticsBot && researchBot) {
+    await createMandate(RESEARCH_BOT_PK, "research-bot", analyticsBot.address, "500", ["analytics"]);
+  }
+
+  log("seed", "");
+  log("seed", "=== Seed complete! ===");
+  log("seed", "Mandates created:");
+  log("seed", "  trader-bot → signal-bot:  1000 mUSD (data-signal) ✅");
+  if (computeBot) log("seed", "  trader-bot → compute-bot: 30 mUSD (compute) ⚠️ will exhaust!");
+  if (researchBot) log("seed", "  research-bot → analytics-bot: 500 mUSD (analytics) ✅");
 }
 
 main().catch((e) => {

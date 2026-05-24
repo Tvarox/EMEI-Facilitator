@@ -1,7 +1,7 @@
 //! Invoice route handlers: POST /invoice, /present, /pay, /collect
 //!
 //! Each handler inserts a real-time event into the DB with the actual
-//! transaction hash after a successful submission.
+//! transaction hash and full context after a successful submission.
 
 use std::sync::Arc;
 
@@ -21,6 +21,8 @@ pub async fn create_invoice(
     Json(body): Json<CreateInvoiceRequest>,
 ) -> Result<(StatusCode, Json<TxResponse>), EmeiError> {
     body.validate()?;
+
+    let issuer_address = signer.0.address();
 
     let payer: Address = body.payer.parse().map_err(|_| EmeiError::Validation {
         field: "payer".into(),
@@ -109,22 +111,25 @@ pub async fn create_invoice(
 
     let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
 
-    // Insert real-time event with actual tx hash
+    // Insert real-time event with full context
     let _ = state
         .db
         .insert_event(&IndexedEvent {
             event_type: "InvoiceCreated".to_string(),
-            block_number: now_ts() as u64,
+            block_number: now_ts(),
             tx_hash: tx_hash_str.clone(),
             log_index: 0,
             timestamp: now_ts(),
-            invoice_id: None, // We don't know the ID yet (assigned on-chain)
+            invoice_id: None,
             payer: Some(format!("0x{}", hex::encode(payer))),
-            issuer: None, // Will be filled by indexer
+            issuer: Some(format!("0x{}", hex::encode(issuer_address))),
             amount: Some(body.amount.clone()),
-            params:
-                serde_json::json!({"category": category, "collection_mode": body.collection_mode})
-                    .to_string(),
+            params: serde_json::json!({
+                "category": category,
+                "collection_mode": body.collection_mode,
+                "asset": format!("0x{}", hex::encode(asset)),
+            })
+            .to_string(),
         })
         .await;
 
@@ -142,6 +147,8 @@ pub async fn present_invoice(
     signer: UserSigner,
     Json(body): Json<PresentRequest>,
 ) -> Result<Json<TxResponse>, EmeiError> {
+    let issuer_address = signer.0.address();
+
     let calldata = IEMEIInvoice::presentCall {
         invoiceId: U256::from(body.invoice_id),
     }
@@ -154,18 +161,18 @@ pub async fn present_invoice(
 
     let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
 
-    // Insert real-time event
+    // Insert real-time event with full context
     let _ = state
         .db
         .insert_event(&IndexedEvent {
             event_type: "InvoicePresented".to_string(),
-            block_number: now_ts() as u64,
+            block_number: now_ts(),
             tx_hash: tx_hash_str.clone(),
             log_index: 0,
             timestamp: now_ts(),
             invoice_id: Some(body.invoice_id),
-            payer: None,
-            issuer: None,
+            payer: None, // Will be enriched by indexer
+            issuer: Some(format!("0x{}", hex::encode(issuer_address))),
             amount: None,
             params: "{}".to_string(),
         })
@@ -182,6 +189,8 @@ pub async fn pay_invoice(
     signer: UserSigner,
     Json(body): Json<PayRequest>,
 ) -> Result<Json<TxResponse>, EmeiError> {
+    let payer_address = signer.0.address();
+
     let calldata = IEMEIInvoice::payCall {
         invoiceId: U256::from(body.invoice_id),
     }
@@ -199,12 +208,12 @@ pub async fn pay_invoice(
         .db
         .insert_event(&IndexedEvent {
             event_type: "InvoicePaid".to_string(),
-            block_number: now_ts() as u64,
+            block_number: now_ts(),
             tx_hash: tx_hash_str.clone(),
             log_index: 0,
             timestamp: now_ts(),
             invoice_id: Some(body.invoice_id),
-            payer: None,
+            payer: Some(format!("0x{}", hex::encode(payer_address))),
             issuer: None,
             amount: None,
             params: "{}".to_string(),
@@ -239,7 +248,7 @@ pub async fn collect_invoice(
         .db
         .insert_event(&IndexedEvent {
             event_type: "InvoicePaid".to_string(),
-            block_number: now_ts() as u64,
+            block_number: now_ts(),
             tx_hash: tx_hash_str.clone(),
             log_index: 0,
             timestamp: now_ts(),
@@ -247,7 +256,8 @@ pub async fn collect_invoice(
             payer: None,
             issuer: None,
             amount: None,
-            params: serde_json::json!({"mandate_id": body.mandate_id}).to_string(),
+            params: serde_json::json!({"mandate_id": body.mandate_id, "source": "collect"})
+                .to_string(),
         })
         .await;
 
