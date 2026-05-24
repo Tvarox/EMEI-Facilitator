@@ -160,18 +160,54 @@ pub async fn get_stats(
     // Latest block from events
     let latest_block = state.db.latest_block().await?.unwrap_or(0);
 
-    // Latest receipt root
-    let (latest_receipt_root, latest_receipt_at) = match state.db.latest_receipt_event().await? {
-        Some((params, ts)) => {
-            // Try to extract root from params JSON
-            let root = serde_json::from_str::<serde_json::Value>(&params)
-                .ok()
-                .and_then(|v| v.get("root").and_then(|r| r.as_str().map(String::from)))
-                .unwrap_or_else(|| params.clone());
-            (Some(root), Some(ts))
+    // Latest receipt root — query chain directly
+    let (latest_receipt_root, latest_receipt_at, receipts_anchored) = {
+        let calldata = alloy_sol_types::SolCall::abi_encode(
+            &crate::contracts::receipt::IEMEIReceipt::getLatestBatchCall {},
+        );
+        match state
+            .chain
+            .call(state.config.receipt_address, calldata.into())
+            .await
+        {
+            Ok(result) => {
+                let batch_num: u64 = crate::contracts::receipt::IEMEIReceipt::getLatestBatchCall::abi_decode_returns(&result)
+                    .ok()
+                    .map(|v| v.try_into().unwrap_or(0u64))
+                    .unwrap_or(0);
+                if batch_num > 0 {
+                    // Get the root for the latest batch
+                    let root_calldata = alloy_sol_types::SolCall::abi_encode(
+                        &crate::contracts::receipt::IEMEIReceipt::getMerkleRootCall {
+                            batchNumber: alloy_primitives::U256::from(batch_num),
+                        },
+                    );
+                    let root_str = match state
+                        .chain
+                        .call(state.config.receipt_address, root_calldata.into())
+                        .await
+                    {
+                        Ok(r) => {
+                            let root = crate::contracts::receipt::IEMEIReceipt::getMerkleRootCall::abi_decode_returns(&r).ok();
+                            root.map(|bytes| format!("0x{}", hex::encode(bytes)))
+                        }
+                        Err(_) => None,
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    (root_str, Some(now), batch_num as i64)
+                } else {
+                    (None, None, 0)
+                }
+            }
+            Err(_) => (None, None, 0),
         }
-        None => (None, None),
     };
+
+    // Override the DB-based receipts_anchored with the chain value
+    totals.receipts_anchored = receipts_anchored;
 
     Ok(Json(StatsResponse {
         totals,
