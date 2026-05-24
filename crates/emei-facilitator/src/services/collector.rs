@@ -117,6 +117,29 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                             "collection submitted"
                         );
 
+                        let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
+
+                        // Insert real-time event with actual tx hash
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let _ = state
+                            .db
+                            .insert_event(&crate::db::IndexedEvent {
+                                event_type: "InvoicePaid".to_string(),
+                                block_number: now,
+                                tx_hash: tx_hash_str,
+                                log_index: 0,
+                                timestamp: now,
+                                invoice_id: Some(id),
+                                payer: Some(format!("0x{}", hex::encode(invoice.payer))),
+                                issuer: Some(format!("0x{}", hex::encode(invoice.issuer))),
+                                amount: Some(invoice.amount.to_string()),
+                                params: serde_json::json!({"mandate_id": mandate_id, "source": "auto_collector"}).to_string(),
+                            })
+                            .await;
+
                         // Persist receipt to DB (durable) AND in-memory queue (fast path)
                         let receipt_hash =
                             alloy_primitives::keccak256(U256::from(id).to_be_bytes::<32>());

@@ -1,14 +1,17 @@
 //! Invoice route handlers: POST /invoice, /present, /pay, /collect
+//!
+//! Each handler inserts a real-time event into the DB with the actual
+//! transaction hash after a successful submission.
 
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode, Json};
 
 use crate::{
-    contracts::invoice::IEMEIInvoice, error::EmeiError, signing::UserSigner, state::AppState,
-    types::*,
+    contracts::invoice::IEMEIInvoice, db::IndexedEvent, error::EmeiError, signing::UserSigner,
+    state::AppState, types::*,
 };
 
 /// POST /emei/invoice — Create a new invoice on-chain.
@@ -34,6 +37,12 @@ pub async fn create_invoice(
             field: "amount".into(),
             reason: "invalid U256".into(),
         })?;
+
+    let category = body
+        .line_items
+        .first()
+        .map(|li| li.category.clone())
+        .unwrap_or_default();
 
     // Convert line items
     let line_items: Vec<IEMEIInvoice::LineItem> = body
@@ -98,10 +107,31 @@ pub async fn create_invoice(
         .send_user(signer.0, state.config.invoice_address, calldata.into())
         .await?;
 
+    let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
+
+    // Insert real-time event with actual tx hash
+    let _ = state
+        .db
+        .insert_event(&IndexedEvent {
+            event_type: "InvoiceCreated".to_string(),
+            block_number: now_ts() as u64,
+            tx_hash: tx_hash_str.clone(),
+            log_index: 0,
+            timestamp: now_ts(),
+            invoice_id: None, // We don't know the ID yet (assigned on-chain)
+            payer: Some(format!("0x{}", hex::encode(payer))),
+            issuer: None, // Will be filled by indexer
+            amount: Some(body.amount.clone()),
+            params:
+                serde_json::json!({"category": category, "collection_mode": body.collection_mode})
+                    .to_string(),
+        })
+        .await;
+
     Ok((
         StatusCode::CREATED,
         Json(TxResponse {
-            tx_hash: format!("0x{}", hex::encode(tx_hash)),
+            tx_hash: tx_hash_str,
         }),
     ))
 }
@@ -122,8 +152,27 @@ pub async fn present_invoice(
         .send_user(signer.0, state.config.invoice_address, calldata.into())
         .await?;
 
+    let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
+
+    // Insert real-time event
+    let _ = state
+        .db
+        .insert_event(&IndexedEvent {
+            event_type: "InvoicePresented".to_string(),
+            block_number: now_ts() as u64,
+            tx_hash: tx_hash_str.clone(),
+            log_index: 0,
+            timestamp: now_ts(),
+            invoice_id: Some(body.invoice_id),
+            payer: None,
+            issuer: None,
+            amount: None,
+            params: "{}".to_string(),
+        })
+        .await;
+
     Ok(Json(TxResponse {
-        tx_hash: format!("0x{}", hex::encode(tx_hash)),
+        tx_hash: tx_hash_str,
     }))
 }
 
@@ -143,8 +192,27 @@ pub async fn pay_invoice(
         .send_user(signer.0, state.config.invoice_address, calldata.into())
         .await?;
 
+    let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
+
+    // Insert real-time event
+    let _ = state
+        .db
+        .insert_event(&IndexedEvent {
+            event_type: "InvoicePaid".to_string(),
+            block_number: now_ts() as u64,
+            tx_hash: tx_hash_str.clone(),
+            log_index: 0,
+            timestamp: now_ts(),
+            invoice_id: Some(body.invoice_id),
+            payer: None,
+            issuer: None,
+            amount: None,
+            params: "{}".to_string(),
+        })
+        .await;
+
     Ok(Json(TxResponse {
-        tx_hash: format!("0x{}", hex::encode(tx_hash)),
+        tx_hash: tx_hash_str,
     }))
 }
 
@@ -164,7 +232,35 @@ pub async fn collect_invoice(
         .send_hot(state.config.invoice_address, calldata.into())
         .await?;
 
+    let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
+
+    // Insert real-time event
+    let _ = state
+        .db
+        .insert_event(&IndexedEvent {
+            event_type: "InvoicePaid".to_string(),
+            block_number: now_ts() as u64,
+            tx_hash: tx_hash_str.clone(),
+            log_index: 0,
+            timestamp: now_ts(),
+            invoice_id: Some(body.invoice_id),
+            payer: None,
+            issuer: None,
+            amount: None,
+            params: serde_json::json!({"mandate_id": body.mandate_id}).to_string(),
+        })
+        .await;
+
     Ok(Json(TxResponse {
-        tx_hash: format!("0x{}", hex::encode(tx_hash)),
+        tx_hash: tx_hash_str,
     }))
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn now_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
