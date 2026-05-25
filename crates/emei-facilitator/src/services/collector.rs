@@ -144,6 +144,7 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                                 issuer: Some(format!("0x{}", hex::encode(invoice.issuer))),
                                 amount: Some(invoice.amount.to_string()),
                                 params: serde_json::json!({"mandate_id": mandate_id, "source": "auto_collector", "job_id": job_id}).to_string(),
+                                status: "pending".to_string(),
                             })
                             .await;
                     }

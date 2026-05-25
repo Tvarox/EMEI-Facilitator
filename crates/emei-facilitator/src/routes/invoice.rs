@@ -127,6 +127,7 @@ pub async fn create_invoice(
                 "asset": format!("0x{}", hex::encode(asset)),
             })
             .to_string(),
+            status: "pending".to_string(),
         })
         .await;
 
@@ -172,6 +173,7 @@ pub async fn present_invoice(
             issuer: Some(format!("0x{}", hex::encode(issuer_address))),
             amount: None,
             params: "{}".to_string(),
+            status: "pending".to_string(),
         })
         .await;
 
@@ -214,6 +216,7 @@ pub async fn pay_invoice(
             issuer: None,
             amount: None,
             params: "{}".to_string(),
+            status: "pending".to_string(),
         })
         .await;
 
@@ -254,6 +257,7 @@ pub async fn collect_invoice(
             amount: None,
             params: serde_json::json!({"mandate_id": body.mandate_id, "source": "collect"})
                 .to_string(),
+            status: "pending".to_string(),
         })
         .await;
 

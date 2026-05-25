@@ -69,6 +69,7 @@ pub struct PublicEvent {
     pub payer: Option<String>,
     pub amount_musd: Option<String>,
     pub category: Option<String>,
+    pub status: String,
 }
 
 #[derive(Serialize)]
@@ -247,6 +248,7 @@ pub async fn get_events(
                 payer: e.payer,
                 amount_musd,
                 category,
+                status: e.status,
             }
         })
         .collect();

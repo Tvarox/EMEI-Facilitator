@@ -129,6 +129,30 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
                             tx = %event.tx_hash,
                             "webhook_worker: InvoicePaid confirmed, queuing receipt + feedback"
                         );
+
+                        // Promote the optimistic pending event to confirmed (update in-place)
+                        let promoted = state
+                            .db
+                            .confirm_pending_event_for_invoice(
+                                inv_id,
+                                "InvoicePaid",
+                                &event.tx_hash,
+                                event.block_number,
+                                event.log_index,
+                                event.timestamp,
+                                event.payer.as_deref(),
+                                event.issuer.as_deref(),
+                                event.amount.as_deref(),
+                            )
+                            .await
+                            .unwrap_or(false);
+                        if promoted {
+                            tracing::info!(
+                                invoice_id = inv_id,
+                                "webhook_worker: promoted pending → confirmed"
+                            );
+                        }
+
                         let receipt_hash =
                             alloy_primitives::keccak256(U256::from(inv_id).to_be_bytes::<32>());
                         let hash_bytes: [u8; 32] = receipt_hash.into();
@@ -163,11 +187,22 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
                     }
                 }
 
-                state
-                    .db
-                    .upsert_confirmed_event(&event)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                // If we promoted the pending row, skip the upsert (it's already confirmed)
+                // Otherwise upsert as normal for events without a prior pending row
+                if !(event.event_type == "InvoicePaid"
+                    && event.invoice_id.is_some()
+                    && state
+                        .db
+                        .is_event_confirmed(&event.tx_hash, event.log_index)
+                        .await
+                        .unwrap_or(false))
+                {
+                    state
+                        .db
+                        .upsert_confirmed_event(&event)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
                 processed += 1;
             } else {
                 // Log exists but couldn't be parsed into a known event
@@ -237,6 +272,7 @@ fn parse_log(tx_hash: &Option<String>, log: &AlchemyLog) -> Option<IndexedEvent>
                     None
                 },
                 params: "{}".to_string(),
+            status: "pending".to_string(),
             })
         }
         // 3 topics: InvoicePresented/Paid/Overdue (invoiceId, payer indexed)
@@ -265,6 +301,7 @@ fn parse_log(tx_hash: &Option<String>, log: &AlchemyLog) -> Option<IndexedEvent>
                 issuer: None,
                 amount,
                 params: "{}".to_string(),
+            status: "pending".to_string(),
             })
         }
         _ => None,
@@ -421,6 +458,7 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                         None
                     },
                     params: "{}".to_string(),
+            status: "pending".to_string(),
                 })
             }
             // 3 topics: InvoicePresented/Paid/Overdue
@@ -452,6 +490,7 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                     issuer: None,
                     amount,
                     params: "{}".to_string(),
+            status: "pending".to_string(),
                 })
             }
             _ => None,
@@ -476,6 +515,29 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
             // Side effects for InvoicePaid — ONLY on first confirmation
             if !already_confirmed && event.event_type == "InvoicePaid" {
                 if let Some(inv_id) = event.invoice_id {
+                    // Promote the optimistic pending event to confirmed (update in-place)
+                    let promoted = state
+                        .db
+                        .confirm_pending_event_for_invoice(
+                            inv_id,
+                            "InvoicePaid",
+                            &event.tx_hash,
+                            event.block_number,
+                            event.log_index,
+                            event.timestamp,
+                            event.payer.as_deref(),
+                            event.issuer.as_deref(),
+                            event.amount.as_deref(),
+                        )
+                        .await
+                        .unwrap_or(false);
+                    if promoted {
+                        tracing::info!(
+                            invoice_id = inv_id,
+                            "webhook_worker: promoted pending → confirmed (graphql)"
+                        );
+                    }
+
                     let receipt_hash =
                         alloy_primitives::keccak256(U256::from(inv_id).to_be_bytes::<32>());
                     let hash_bytes: [u8; 32] = receipt_hash.into();
@@ -509,11 +571,21 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                 }
             }
 
-            state
-                .db
-                .upsert_confirmed_event(&event)
-                .await
-                .map_err(|e| e.to_string())?;
+            // If we promoted the pending row, skip the upsert (already confirmed)
+            if !(event.event_type == "InvoicePaid"
+                && event.invoice_id.is_some()
+                && state
+                    .db
+                    .is_event_confirmed(&event.tx_hash, event.log_index)
+                    .await
+                    .unwrap_or(false))
+            {
+                state
+                    .db
+                    .upsert_confirmed_event(&event)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             processed += 1;
         }
     }
