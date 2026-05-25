@@ -106,7 +106,7 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                     "collecting invoice via mandate"
                 );
 
-                // 4. Call collect
+                // 4. Enqueue collect tx to the tx_queue (confirmed by tx_sender workers)
                 let calldata = IEMEIInvoice::collectCall {
                     invoiceId: U256::from(id),
                     mandateId: U256::from(mandate_id),
@@ -114,22 +114,19 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                 .abi_encode();
 
                 match state
-                    .chain
-                    .send_hot(state.config.invoice_address, calldata.into(), &state.redis)
+                    .enqueue_tx(state.config.invoice_address, calldata, 2, "collector")
                     .await
                 {
-                    Ok(tx_hash) => {
+                    Ok(job_id) => {
                         tracing::info!(
                             service = "auto_collector",
                             invoice_id = id,
                             mandate_id,
-                            tx = %format!("0x{}", hex::encode(tx_hash)),
-                            "collection submitted"
+                            job_id,
+                            "collection enqueued"
                         );
 
-                        let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
-
-                        // Insert real-time event with actual tx hash
+                        // Insert pending event (webhook will confirm it later)
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -139,29 +136,23 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                             .insert_event(&crate::db::IndexedEvent {
                                 event_type: "InvoicePaid".to_string(),
                                 block_number: now,
-                                tx_hash: tx_hash_str,
+                                tx_hash: format!("pending-collect-job-{}", job_id),
                                 log_index: 0,
                                 timestamp: now,
                                 invoice_id: Some(id),
                                 payer: Some(format!("0x{}", hex::encode(invoice.payer))),
                                 issuer: Some(format!("0x{}", hex::encode(invoice.issuer))),
                                 amount: Some(invoice.amount.to_string()),
-                                params: serde_json::json!({"mandate_id": mandate_id, "source": "auto_collector"}).to_string(),
+                                params: serde_json::json!({"mandate_id": mandate_id, "source": "auto_collector", "job_id": job_id}).to_string(),
                             })
                             .await;
-
-                        // Persist receipt to DB (durable) — webhook worker also queues on confirmation
-                        let receipt_hash =
-                            alloy_primitives::keccak256(U256::from(id).to_be_bytes::<32>());
-                        let hash_bytes: [u8; 32] = receipt_hash.into();
-                        let _ = state.db.insert_pending_receipt(&hash_bytes, Some(id)).await;
                     }
                     Err(e) => {
                         tracing::warn!(
                             service = "auto_collector",
                             invoice_id = id,
                             error = %e,
-                            "collection failed"
+                            "collection enqueue failed"
                         );
                     }
                 }

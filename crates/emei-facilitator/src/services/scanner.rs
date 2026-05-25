@@ -102,32 +102,31 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
             "marking invoice as overdue"
         );
 
-        // Mark overdue on-chain
+        // Mark overdue on-chain via tx_queue
         let calldata = IEMEIInvoice::markOverdueCall {
             invoiceId: U256::from(id),
         }
         .abi_encode();
 
         match state
-            .chain
-            .send_hot(state.config.invoice_address, calldata.into(), &state.redis)
+            .enqueue_tx(state.config.invoice_address, calldata, 5, "overdue_scanner")
             .await
         {
-            Ok(tx_hash) => {
+            Ok(job_id) => {
                 tracing::info!(
                     service = "overdue_scanner",
                     invoice_id = id,
-                    tx = %format!("0x{}", hex::encode(tx_hash)),
-                    "invoice marked overdue"
+                    job_id,
+                    "markOverdue enqueued"
                 );
 
-                // Insert event
+                // Insert event (tx_hash will be filled by indexer once confirmed)
                 let _ = state
                     .db
                     .insert_event(&crate::db::IndexedEvent {
                         event_type: "InvoiceOverdue".to_string(),
                         block_number: now,
-                        tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                        tx_hash: format!("pending:job_{}", job_id),
                         log_index: 0,
                         timestamp: now,
                         invoice_id: Some(id),
@@ -139,9 +138,6 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
                     .await;
 
                 // Penalize payer reputation via giveFeedback(payer, invoiceId, 0)
-                // Wait for the markOverdue tx to be processed first
-                tokio::time::sleep(Duration::from_secs(8)).await;
-
                 let feedback_calldata = IBay8004::giveFeedbackCall {
                     subject: invoice.payer,
                     invoiceId: U256::from(id),
@@ -150,21 +146,21 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
                 .abi_encode();
 
                 match state
-                    .chain
-                    .send_hot(
+                    .enqueue_tx(
                         state.config.bay8004_address,
-                        feedback_calldata.into(),
-                        &state.redis,
+                        feedback_calldata,
+                        3, // lower priority than markOverdue
+                        "overdue_scanner:feedback",
                     )
                     .await
                 {
-                    Ok(fb_tx) => {
+                    Ok(fb_job) => {
                         tracing::info!(
                             service = "overdue_scanner",
                             invoice_id = id,
                             payer = %invoice.payer,
-                            tx = %format!("0x{}", hex::encode(fb_tx)),
-                            "reputation penalty applied"
+                            job_id = fb_job,
+                            "reputation penalty enqueued"
                         );
                     }
                     Err(e) => {
@@ -172,21 +168,18 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
                             service = "overdue_scanner",
                             invoice_id = id,
                             error = %e,
-                            "reputation penalty failed"
+                            "reputation penalty enqueue failed"
                         );
                     }
                 }
             }
             Err(e) => {
-                // InvalidStatusTransition means it's already overdue or paid
-                if !e.to_string().contains("InvalidStatusTransition") {
-                    tracing::warn!(
-                        service = "overdue_scanner",
-                        invoice_id = id,
-                        error = %e,
-                        "markOverdue failed"
-                    );
-                }
+                tracing::warn!(
+                    service = "overdue_scanner",
+                    invoice_id = id,
+                    error = %e,
+                    "markOverdue enqueue failed"
+                );
             }
         }
 

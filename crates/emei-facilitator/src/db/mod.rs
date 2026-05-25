@@ -1,6 +1,7 @@
 //! PostgreSQL storage layer for indexed contract events.
 
 pub mod schema;
+pub mod tx_queue;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -409,10 +410,12 @@ impl StatementStore {
 
     /// Delete all events and reset state. Used for clean restarts.
     pub async fn truncate_all(&self) -> Result<(), EmeiError> {
-        sqlx::raw_sql("TRUNCATE events, pending_receipts, pending_txs, indexer_state")
-            .execute(&self.pool)
-            .await
-            .map_err(|e| EmeiError::Database(format!("truncate_all failed: {e}")))?;
+        sqlx::raw_sql(
+            "TRUNCATE events, pending_receipts, pending_txs, indexer_state, tx_queue RESTART IDENTITY",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("truncate_all failed: {e}")))?;
         Ok(())
     }
 

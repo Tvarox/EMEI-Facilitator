@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use alloy_network::Ethereum;
+use alloy_provider::RootProvider;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -41,10 +43,28 @@ impl ReceiptQueue {
 /// Shared application state.
 pub struct AppState {
     pub chain: Arc<dyn ChainClient>,
+    pub rpc_provider: RootProvider<Ethereum>,
     pub db: StatementStore,
     pub redis: RedisClient,
     pub receipt_queue: ReceiptQueue,
     pub config: EmeiConfig,
     pub cancel: CancellationToken,
     pub started_at: std::time::Instant,
+}
+
+impl AppState {
+    /// Enqueue a hot wallet transaction to the tx_queue for guaranteed on-chain confirmation.
+    /// Returns the job ID. The tx_sender workers will pick it up, send it, and confirm it.
+    pub async fn enqueue_tx(
+        &self,
+        to: alloy_primitives::Address,
+        calldata: Vec<u8>,
+        priority: i16,
+        source: &str,
+    ) -> Result<i64, crate::error::EmeiError> {
+        let to_str = format!("0x{}", hex::encode(to));
+        self.db
+            .enqueue_tx(&to_str, &calldata, priority, source)
+            .await
+    }
 }

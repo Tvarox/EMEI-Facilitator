@@ -48,4 +48,29 @@ CREATE TABLE IF NOT EXISTS pending_txs (
     confirmed_at BIGINT,
     status TEXT NOT NULL DEFAULT 'pending'
 );
+
+-- TX Queue: durable job queue for hot wallet transactions
+CREATE TABLE IF NOT EXISTS tx_queue (
+    id BIGSERIAL PRIMARY KEY,
+    to_address TEXT NOT NULL,
+    calldata BYTEA NOT NULL,
+    priority SMALLINT NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    wallet_id TEXT,
+    nonce BIGINT,
+    tx_hash TEXT,
+    submitted_at BIGINT,
+    confirmed_at BIGINT,
+    block_number BIGINT,
+    error TEXT,
+    retries SMALLINT NOT NULL DEFAULT 0,
+    max_retries SMALLINT NOT NULL DEFAULT 3,
+    created_at BIGINT NOT NULL,
+    assigned_at BIGINT,
+    source TEXT NOT NULL DEFAULT 'unknown'
+);
+
+CREATE INDEX IF NOT EXISTS idx_tx_queue_pending ON tx_queue(priority DESC, id ASC) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_tx_queue_assigned ON tx_queue(wallet_id, status) WHERE status = 'assigned';
+CREATE INDEX IF NOT EXISTS idx_tx_queue_submitted ON tx_queue(status) WHERE status = 'submitted';
 "#;

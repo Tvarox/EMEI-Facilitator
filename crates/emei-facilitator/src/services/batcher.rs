@@ -97,18 +97,22 @@ async fn flush_batch(state: &AppState, batch_number: &mut u64) -> Result<(), Eme
     .abi_encode();
 
     match state
-        .chain
-        .send_hot(state.config.receipt_address, calldata.into(), &state.redis)
+        .enqueue_tx(
+            state.config.receipt_address,
+            calldata,
+            10,
+            "receipt_batcher",
+        )
         .await
     {
-        Ok(tx_hash) => {
+        Ok(job_id) => {
             tracing::info!(
                 service = "receipt_batcher",
                 batch = *batch_number,
                 receipts = count,
                 root = hex::encode(root),
-                tx = hex::encode(tx_hash),
-                "batch posted"
+                job_id,
+                "batch enqueued"
             );
             *batch_number += 1;
             Ok(())
@@ -117,17 +121,6 @@ async fn flush_batch(state: &AppState, batch_number: &mut u64) -> Result<(), Eme
             // Re-insert receipts to DB on failure so they are retried next cycle
             for receipt in &all_receipts {
                 let _ = state.db.insert_pending_receipt(receipt, None).await;
-            }
-            // If it's a contract revert (batch already exists), re-sync batch number
-            if matches!(&e, EmeiError::ContractRevert { .. }) || e.to_string().contains("revert") {
-                if let Ok(latest) = get_latest_batch_from_chain(state).await {
-                    *batch_number = latest + 1;
-                    tracing::info!(
-                        service = "receipt_batcher",
-                        new_batch_number = *batch_number,
-                        "re-synced batch number after revert"
-                    );
-                }
             }
             Err(e)
         }
