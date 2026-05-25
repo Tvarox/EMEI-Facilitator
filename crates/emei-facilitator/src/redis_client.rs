@@ -9,6 +9,8 @@ use crate::error::EmeiError;
 #[derive(Clone)]
 pub struct RedisClient {
     conn: ConnectionManager,
+    /// Separate connection for the webhook worker to avoid contention with nonce ops
+    worker_conn: ConnectionManager,
 }
 
 // Queue keys
@@ -23,33 +25,62 @@ const NONCE_PREFIX: &str = "emei:nonce:";
 const STATS_CACHE: &str = "emei:cache:stats";
 
 impl RedisClient {
-    /// Connect to Redis.
+    /// Connect to Redis (creates two connections: main + worker).
     pub async fn new(redis_url: &str) -> Result<Self, EmeiError> {
         let client = redis::Client::open(redis_url)
             .map_err(|e| EmeiError::Internal(format!("redis client error: {e}")))?;
-        let conn = ConnectionManager::new(client)
+        let conn = ConnectionManager::new(client.clone())
             .await
             .map_err(|e| EmeiError::Internal(format!("redis connection failed: {e}")))?;
-        Ok(Self { conn })
+        let worker_conn = ConnectionManager::new(client)
+            .await
+            .map_err(|e| EmeiError::Internal(format!("redis worker connection failed: {e}")))?;
+        Ok(Self { conn, worker_conn })
     }
 
-    /// Push a raw webhook payload to the processing queue.
+    /// Push a raw webhook payload to the processing queue using raw LPUSH.
     pub async fn push_webhook(&self, payload: &str) -> Result<(), EmeiError> {
         let mut conn = self.conn.clone();
-        conn.lpush::<_, _, ()>(WEBHOOK_QUEUE, payload)
+        let _: i64 = redis::cmd("LPUSH")
+            .arg(WEBHOOK_QUEUE)
+            .arg(payload)
+            .query_async(&mut conn)
             .await
-            .map_err(|e| EmeiError::Internal(format!("redis lpush failed: {e}")))?;
+            .map_err(|e| EmeiError::Internal(format!("redis LPUSH failed: {e}")))?;
         Ok(())
     }
 
-    /// Pop a webhook payload from the queue (blocking, 5s timeout).
+    /// Pop a webhook payload from the queue (BLOCKING — server-side wait up to 5s).
+    /// Uses raw BRPOP command and reads bytes for maximum compatibility.
     pub async fn pop_webhook(&self) -> Result<Option<String>, EmeiError> {
-        let mut conn = self.conn.clone();
-        let result: Option<(String, String)> = conn
-            .brpop(WEBHOOK_QUEUE, 5.0)
+        let mut conn = self.worker_conn.clone();
+        // BRPOP returns Option<(key_bytes, value_bytes)> on success, None on timeout
+        let result: Option<(Vec<u8>, Vec<u8>)> = redis::cmd("BRPOP")
+            .arg(WEBHOOK_QUEUE)
+            .arg(5_u64)
+            .query_async(&mut conn)
             .await
-            .map_err(|e| EmeiError::Internal(format!("redis brpop failed: {e}")))?;
-        Ok(result.map(|(_, val)| val))
+            .map_err(|e| EmeiError::Internal(format!("redis BRPOP failed: {e}")))?;
+
+        match result {
+            Some((_, val_bytes)) => {
+                let val = String::from_utf8(val_bytes)
+                    .map_err(|e| EmeiError::Internal(format!("BRPOP utf8 decode: {e}")))?;
+                tracing::debug!(len = val.len(), "redis: BRPOP got value");
+                Ok(Some(val))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get webhook queue length (uses dedicated worker connection).
+    pub async fn webhook_queue_len(&self) -> Result<u64, EmeiError> {
+        let mut conn = self.worker_conn.clone();
+        let len: u64 = conn
+            .llen(WEBHOOK_QUEUE)
+            .await
+            .map_err(|e| EmeiError::Internal(format!("redis llen webhook failed: {e}")))?;
+        Ok(len)
     }
 
     /// Push a receipt hash to the persistent queue.

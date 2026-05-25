@@ -17,34 +17,50 @@ pub async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    let body_len = body.len();
+
     // Verify signature if signing key is configured
     if let Some(ref signing_key) = state.config.webhook_signing_key {
         let signature = match headers.get("x-alchemy-signature") {
             Some(val) => match val.to_str() {
                 Ok(s) => s.to_string(),
-                Err(_) => return StatusCode::UNAUTHORIZED,
+                Err(_) => {
+                    tracing::warn!("webhook: received request with invalid signature header");
+                    return StatusCode::UNAUTHORIZED;
+                }
             },
-            None => return StatusCode::UNAUTHORIZED,
+            None => {
+                tracing::warn!("webhook: received request without signature header");
+                return StatusCode::UNAUTHORIZED;
+            }
         };
 
         if !verify_signature(signing_key, &body, &signature) {
-            tracing::warn!("webhook: invalid signature");
+            tracing::warn!("webhook: signature verification failed");
             return StatusCode::UNAUTHORIZED;
         }
     }
 
     let payload = match String::from_utf8(body.to_vec()) {
         Ok(s) => s,
-        Err(_) => return StatusCode::BAD_REQUEST,
+        Err(_) => {
+            tracing::warn!("webhook: received non-UTF8 body");
+            return StatusCode::BAD_REQUEST;
+        }
     };
 
     match state.redis.push_webhook(&payload).await {
         Ok(_) => {
-            tracing::debug!("webhook: queued payload");
+            let len = state.redis.webhook_queue_len().await.unwrap_or(0);
+            tracing::info!(
+                bytes = body_len,
+                queue_after = len,
+                "webhook: received and queued"
+            );
             StatusCode::OK
         }
         Err(e) => {
-            tracing::error!(error = %e, "webhook: failed to queue");
+            tracing::error!(error = %e, "webhook: failed to queue to Redis");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }

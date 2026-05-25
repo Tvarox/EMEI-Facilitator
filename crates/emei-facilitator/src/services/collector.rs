@@ -64,6 +64,9 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
     let scan_start = total_invoices.saturating_sub(20) + 1;
 
     for id in (scan_start..=total_invoices).rev() {
+        // Rate limit: yield to other tasks and avoid RPC flooding
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         // Fetch invoice
         let invoice = match get_invoice(state, id).await {
             Ok(inv) => inv,
@@ -72,6 +75,16 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
 
         // Only process PRESENTED (status=1) invoices with mandate collection mode (0)
         if invoice.status != 1 || invoice.collectionMode != 0 {
+            continue;
+        }
+
+        // Skip if we already submitted a collect tx for this invoice (check DB)
+        if state
+            .db
+            .has_event_for_invoice(id, "InvoicePaid")
+            .await
+            .unwrap_or(false)
+        {
             continue;
         }
 
