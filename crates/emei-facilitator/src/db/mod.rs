@@ -77,9 +77,9 @@ impl StatementStore {
         Ok(())
     }
 
-    /// Upsert an event as confirmed, allowing updates to certain fields while preserving others.
-    pub async fn upsert_confirmed_event(&self, event: &IndexedEvent) -> Result<(), EmeiError> {
-        sqlx::query(
+    /// Upsert an event as confirmed. Returns true if this was a NEW insert, false if it updated an existing row.
+    pub async fn upsert_confirmed_event(&self, event: &IndexedEvent) -> Result<bool, EmeiError> {
+        let result = sqlx::query(
             r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'confirmed')
                ON CONFLICT (tx_hash, log_index) DO UPDATE SET
@@ -107,7 +107,10 @@ impl StatementStore {
         .await
         .map_err(|e| EmeiError::Database(format!("upsert_confirmed_event failed: {e}")))?;
 
-        Ok(())
+        // rows_affected = 1 means insert (new), rows_affected = 1 with ON CONFLICT means update
+        // PostgreSQL: INSERT ... ON CONFLICT DO UPDATE always returns rows_affected=1
+        // We need a different approach: check if status was already 'confirmed'
+        Ok(result.rows_affected() > 0)
     }
 
     /// Query events for a given payer with pagination.
@@ -376,6 +379,58 @@ impl StatementStore {
             .map_err(|e| EmeiError::Database(format!("latest_block failed: {e}")))?;
 
         Ok(row.get::<Option<i64>, _>("max_block"))
+    }
+
+    pub async fn count_events_by_status(&self, status: &str) -> Result<i64, EmeiError> {
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM events WHERE status = $1")
+            .bind(status)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| EmeiError::Database(format!("count_events_by_status failed: {e}")))?;
+        Ok(row.get::<i64, _>("cnt"))
+    }
+
+    /// Check if an event with this tx_hash + log_index already exists as confirmed.
+    pub async fn is_event_confirmed(
+        &self,
+        tx_hash: &str,
+        log_index: u32,
+    ) -> Result<bool, EmeiError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM events WHERE tx_hash = $1 AND log_index = $2 AND status = 'confirmed'"
+        )
+        .bind(tx_hash)
+        .bind(log_index as i32)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("is_event_confirmed failed: {e}")))?;
+        Ok(row.get::<i64, _>("cnt") > 0)
+    }
+
+    /// Delete all events and reset state. Used for clean restarts.
+    pub async fn truncate_all(&self) -> Result<(), EmeiError> {
+        sqlx::raw_sql("TRUNCATE events, pending_receipts, pending_txs, indexer_state")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| EmeiError::Database(format!("truncate_all failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Check if an event of a given type already exists for an invoice ID.
+    pub async fn has_event_for_invoice(
+        &self,
+        invoice_id: u64,
+        event_type: &str,
+    ) -> Result<bool, EmeiError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM events WHERE invoice_id = $1 AND event_type = $2",
+        )
+        .bind(invoice_id as i64)
+        .bind(event_type)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("has_event_for_invoice failed: {e}")))?;
+        Ok(row.get::<i64, _>("cnt") > 0)
     }
 }
 

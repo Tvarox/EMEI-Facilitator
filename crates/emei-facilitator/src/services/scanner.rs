@@ -61,6 +61,10 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
         .as_secs();
 
     for id in scan_start..=total_invoices {
+        // Rate limit: yield to other tasks
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
         let invoice = match get_invoice(state, id).await {
             Ok(inv) => inv,
             Err(_) => continue,

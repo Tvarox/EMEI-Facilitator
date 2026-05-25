@@ -8,6 +8,7 @@ use axum::{
 
 use crate::state::AppState;
 
+pub mod dashboard;
 pub mod health;
 pub mod identity;
 pub mod invoice;
@@ -45,6 +46,10 @@ pub fn emei_routes() -> Router<Arc<AppState>> {
         .route("/emei/paylink/{id}", get(paylink::get_paylink))
         // Public dashboard endpoints (read-only, no auth)
         .nest("/emei/public", public::router())
+        // Ops dashboard (HTML + JSON)
+        .route("/emei/ops", get(dashboard::ops_dashboard))
+        .route("/emei/ops/status", get(dashboard::ops_status))
+        .route("/emei/ops/reset", post(dashboard::ops_reset))
         // Health check
         .route("/health", get(health::health_check))
         // Webhook (Alchemy event notifications)
