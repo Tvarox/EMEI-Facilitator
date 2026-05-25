@@ -1,8 +1,6 @@
-//! Auto-collector service.
-//!
-//! Periodically scans for PRESENTED invoices with collection_mode=mandate,
-//! finds matching active mandates for the payer, and triggers automatic
-//! collection via the hot wallet.
+// This module implements the auto-collection background service that periodically
+// scans for invoices eligible for collection based on mandate rules and submits
+// collect transactions on their behalf.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,14 +9,12 @@ use alloy_primitives::U256;
 use alloy_sol_types::SolCall;
 use tokio_util::sync::CancellationToken;
 
-use crate::contracts::bay8004::IBay8004;
 use crate::contracts::invoice::IEMEIInvoice;
 use crate::contracts::mandate::IEMEIMandate;
 use crate::error::EmeiError;
 use crate::state::AppState;
 
-/// Background service that checks for invoices eligible for automatic
-/// collection based on mandate rules (default interval: 10s).
+/// Background task that runs a loop to automatically collect eligible invoices based on mandates.
 pub async fn auto_collector(state: Arc<AppState>, cancel: CancellationToken) {
     // Stagger startup: wait 10s to avoid RPC rate limits on boot
     tokio::time::sleep(Duration::from_secs(10)).await;
@@ -106,7 +102,7 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
 
                 match state
                     .chain
-                    .send_hot(state.config.invoice_address, calldata.into())
+                    .send_hot(state.config.invoice_address, calldata.into(), &state.redis)
                     .await
                 {
                     Ok(tx_hash) => {
@@ -141,27 +137,11 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                             })
                             .await;
 
-                        // Persist receipt to DB (durable) AND in-memory queue (fast path)
+                        // Persist receipt to DB (durable) — webhook worker also queues on confirmation
                         let receipt_hash =
                             alloy_primitives::keccak256(U256::from(id).to_be_bytes::<32>());
                         let hash_bytes: [u8; 32] = receipt_hash.into();
                         let _ = state.db.insert_pending_receipt(&hash_bytes, Some(id)).await;
-                        state.receipt_queue.push(hash_bytes).await;
-
-                        // Positive reputation feedback for payer (paid on time)
-                        // Wait for collect tx to be processed before sending feedback
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-
-                        let feedback_calldata = IBay8004::giveFeedbackCall {
-                            subject: invoice.payer,
-                            invoiceId: U256::from(id),
-                            amount: invoice.amount,
-                        }
-                        .abi_encode();
-                        let _ = state
-                            .chain
-                            .send_hot(state.config.bay8004_address, feedback_calldata.into())
-                            .await;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -210,8 +190,7 @@ async fn get_invoice(state: &AppState, id: u64) -> Result<IEMEIInvoice::Invoice,
         .map_err(|e| EmeiError::Internal(format!("decode getInvoice({id}): {e}")))
 }
 
-/// Find an active mandate for the invoice's payer that matches the issuer
-/// and invoice category. Returns the mandate ID if found.
+/// Fetch a mandate from the chain by ID.
 async fn find_matching_mandate(
     state: &AppState,
     invoice: &IEMEIInvoice::Invoice,
@@ -274,8 +253,7 @@ async fn find_matching_mandate(
             continue;
         }
 
-        // Check category — get the first line item's category from the invoice
-        // The invoice struct has lineItems, check if any category matches
+        // Check category (at least one invoice line item category must be in approved list, if specified)
         let category_approved = if mandate.approvedCategories.is_empty() {
             true // no category restriction
         } else {

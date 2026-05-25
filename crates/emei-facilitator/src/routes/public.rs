@@ -1,8 +1,4 @@
-//! Public read-only endpoints for the live demo dashboard.
-//!
-//! All endpoints are unauthenticated GET requests under `/emei/public/`.
-//! They read from the existing SQLite indexer and chain provider.
-
+/// Public route handlers for the EMEI facilitator API, mounted at /emei/public.
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
@@ -20,7 +16,7 @@ use crate::{
     state::AppState,
 };
 
-/// Build the public sub-router (mounted at `/emei/public`).
+/// Build the router for public endpoints under /emei/public
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/stats", get(get_stats))
@@ -28,8 +24,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/agents", get(get_agents))
         .route("/mandates", get(get_mandates))
 }
-
-// ─── Response types ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct StatsResponse {
@@ -114,17 +108,13 @@ pub struct MandateInfo {
     pub status: String,
 }
 
-// ─── Query params ────────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct EventsQuery {
     pub limit: Option<i64>,
     pub before: Option<i64>,
 }
 
-// ─── Handlers ────────────────────────────────────────────────────────────────
-
-/// GET /emei/public/stats — Aggregate protocol statistics.
+/// GET /emei/public/stats — Aggregated stats for the dashboard.
 pub async fn get_stats(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<StatsResponse>, EmeiError> {
@@ -146,11 +136,11 @@ pub async fn get_stats(
         }
     }
 
-    // GMV settled — sum of InvoicePaid amounts (fallback if SettlementExecuted not emitted)
+    // GMV settled — sum of InvoicePaid amounts
     let gmv_wei = state.db.sum_amount_for_type("InvoicePaid").await?;
     let gmv_musd = wei_to_musd_string(gmv_wei);
 
-    // Active mandates (best effort: created - revoked)
+    // Active mandates
     let active_mandates = totals.mandates_created - totals.mandates_revoked;
 
     // Vault TVL — sum vault balances for known agents
@@ -222,7 +212,7 @@ pub async fn get_stats(
     }))
 }
 
-/// GET /emei/public/events — Paginated event feed.
+/// GET /emei/paylink/:id — Fetch invoice details and pre-encoded transaction data for the pay-link page.
 pub async fn get_events(
     State(state): State<Arc<AppState>>,
     Query(params): Query<EventsQuery>,
@@ -267,7 +257,7 @@ pub async fn get_events(
     }))
 }
 
-/// GET /emei/public/agents — Known agent addresses with enrichment.
+/// GET /emei/public/agents — List known agents with enriched data (vault balance, reputation, activity).
 pub async fn get_agents(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<AgentsResponse>, EmeiError> {
@@ -342,9 +332,7 @@ pub async fn get_agents(
     Ok(Json(AgentsResponse { agents }))
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// GET /emei/public/mandates — Active mandates with real-time cap usage.
+/// GET /emei/mandate/{id} — Fetch details of a specific mandate by ID.
 pub async fn get_mandates(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MandatesResponse>, EmeiError> {
@@ -438,8 +426,6 @@ pub async fn get_mandates(
     Ok(Json(MandatesResponse { mandates }))
 }
 
-// ─── Helpers (internal) ──────────────────────────────────────────────────────
-
 /// Convert wei (u128) to a human-readable mUSD string with 2 decimal places.
 fn wei_to_musd_string(wei: u128) -> String {
     let whole = wei / 1_000_000_000_000_000_000;
@@ -447,8 +433,7 @@ fn wei_to_musd_string(wei: u128) -> String {
     format!("{}.{:02}", whole, frac)
 }
 
-/// Parse the DEMO_AGENTS env var (format: "name:0xaddr,name2:0xaddr2").
-/// Falls back to an empty list if unset. Lowercases addresses for DB matching.
+/// Parse demo agents from the DEMO_AGENTS environment variable.
 fn parse_demo_agents() -> Vec<(String, String)> {
     let raw = std::env::var("DEMO_AGENTS").unwrap_or_default();
     if raw.is_empty() {

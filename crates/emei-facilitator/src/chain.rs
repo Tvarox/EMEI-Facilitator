@@ -1,7 +1,4 @@
-/// Trait abstracting on-chain interactions.
-///
-/// Enables mocking for tests while providing a real alloy-rs
-/// implementation for production use.
+/// This module defines the `ChainClient` trait for interacting with the blockchain, and an implementation `AlloyChainClient` that uses the alloy-rs library to send transactions and make calls to the Mantle Sepolia testnet. It also includes error handling to decode revert reasons from failed transactions.
 use alloy_network::{Ethereum, EthereumWallet, TransactionBuilder};
 use alloy_primitives::{Address, Bytes, B256};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
@@ -10,13 +7,19 @@ use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest;
 
 use crate::error::{decode_revert, EmeiError};
+use crate::redis_client::RedisClient;
 
 #[async_trait::async_trait]
 pub trait ChainClient: Send + Sync + 'static {
-    /// Submit a transaction using the hot wallet signer.
-    async fn send_hot(&self, to: Address, calldata: Bytes) -> Result<B256, EmeiError>;
+    /// Submit a transaction using the hot wallet signer with Redis-managed nonce.
+    async fn send_hot(
+        &self,
+        to: Address,
+        calldata: Bytes,
+        redis: &RedisClient,
+    ) -> Result<B256, EmeiError>;
 
-    /// Submit a transaction using a user-provided signer.
+    /// Submit a transaction using a user-provided signer (nonce auto-filled by provider).
     async fn send_user(
         &self,
         signer: PrivateKeySigner,
@@ -26,12 +29,16 @@ pub trait ChainClient: Send + Sync + 'static {
 
     /// Execute a read-only call (no signing required).
     async fn call(&self, to: Address, calldata: Bytes) -> Result<Bytes, EmeiError>;
+
+    /// Get the current on-chain nonce for the hot wallet address.
+    async fn get_hot_nonce(&self) -> Result<u64, EmeiError>;
 }
 
 /// Production chain client using alloy-rs HTTP provider.
 pub struct AlloyChainClient {
     provider: RootProvider<Ethereum>,
     hot_wallet: PrivateKeySigner,
+    hot_address: Address,
 }
 
 impl AlloyChainClient {
@@ -41,20 +48,49 @@ impl AlloyChainClient {
             .parse()
             .map_err(|e| EmeiError::Internal(format!("invalid RPC URL: {e}")))?;
 
-        // Use default() (no fillers) to get a bare RootProvider.
-        // We add wallet fillers per-request in send_with_wallet.
         let provider = ProviderBuilder::default().connect_http(url);
 
         let hot_wallet = PrivateKeySigner::from_bytes(&hot_wallet_key)
             .map_err(|e| EmeiError::Internal(format!("invalid hot wallet key: {e}")))?;
 
+        let hot_address = hot_wallet.address();
+
         Ok(Self {
             provider,
             hot_wallet,
+            hot_address,
         })
     }
 
-    /// Send a transaction signed by the given wallet, with a 5-second timeout.
+    /// Send a transaction with an explicit nonce, signed by the given wallet.
+    async fn send_with_nonce(
+        &self,
+        wallet: EthereumWallet,
+        to: Address,
+        calldata: Bytes,
+        nonce: u64,
+    ) -> Result<B256, EmeiError> {
+        let tx = TransactionRequest::default()
+            .with_to(to)
+            .with_input(calldata)
+            .with_nonce(nonce);
+
+        let provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_provider(&self.provider);
+
+        let pending = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            provider.send_transaction(tx),
+        )
+        .await
+        .map_err(|_| EmeiError::RpcTimeout)?
+        .map_err(|e| Self::map_send_error(e.to_string()))?;
+
+        Ok(*pending.tx_hash())
+    }
+
+    /// Send a transaction signed by the given wallet (nonce auto-filled by provider).
     async fn send_with_wallet(
         &self,
         wallet: EthereumWallet,
@@ -65,59 +101,97 @@ impl AlloyChainClient {
             .with_to(to)
             .with_input(calldata);
 
-        // Build a provider with wallet + recommended fillers (gas, nonce, chain-id)
-        // on top of our base provider.
         let provider = ProviderBuilder::new()
             .wallet(wallet)
             .connect_provider(&self.provider);
 
-        // Send the transaction (signs, fills gas/nonce/chain-id, and submits)
         let pending = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             provider.send_transaction(tx),
         )
         .await
         .map_err(|_| EmeiError::RpcTimeout)?
-        .map_err(|e| {
-            let err_str = e.to_string();
-            // Check for common RPC errors and provide clear messages
-            if err_str.contains("insufficient funds") {
-                // Extract balance and cost from the error message if available
-                let detail = if let (Some(bal_idx), Some(cost_idx)) = (err_str.find("balance "), err_str.find("tx cost ")) {
-                    let balance = err_str[bal_idx + 8..].split(|c: char| !c.is_ascii_digit()).next().unwrap_or("?");
-                    let cost = err_str[cost_idx + 8..].split(|c: char| !c.is_ascii_digit()).next().unwrap_or("?");
-                    format!(
-                        "Insufficient MNT for gas. Account balance: {} wei, transaction cost: {} wei. Fund your account on Mantle Sepolia.",
-                        balance, cost
-                    )
-                } else {
-                    "Account does not have enough MNT to pay for gas. Please fund your account with MNT on Mantle Sepolia.".into()
-                };
-                return EmeiError::InsufficientFunds(detail);
-            }
-            if err_str.contains("nonce too low") {
-                return EmeiError::Conflict(
-                    "Transaction nonce conflict. A previous transaction may still be pending. Please wait and retry.".into()
-                );
-            }
-            if let Some(data) = extract_revert_data(&err_str) {
-                decode_revert(&data)
-            } else {
-                EmeiError::RpcError(err_str)
-            }
-        })?;
+        .map_err(|e| Self::map_send_error(e.to_string()))?;
 
-        // Return the tx hash immediately after submission (fire-and-forget).
-        // Don't wait for block confirmation — Mantle Sepolia can be slow.
         Ok(*pending.tx_hash())
+    }
+
+    fn map_send_error(err_str: String) -> EmeiError {
+        if err_str.contains("insufficient funds") {
+            let detail = if let (Some(bal_idx), Some(cost_idx)) =
+                (err_str.find("balance "), err_str.find("tx cost "))
+            {
+                let balance = err_str[bal_idx + 8..]
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("?");
+                let cost = err_str[cost_idx + 8..]
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("?");
+                format!(
+                    "Insufficient MNT for gas. Balance: {} wei, cost: {} wei.",
+                    balance, cost
+                )
+            } else {
+                "Account does not have enough MNT for gas.".into()
+            };
+            return EmeiError::InsufficientFunds(detail);
+        }
+        if err_str.contains("nonce too low") {
+            return EmeiError::Conflict(
+                "Nonce too low — will re-sync from chain on next attempt.".into(),
+            );
+        }
+        if let Some(data) = extract_revert_data(&err_str) {
+            decode_revert(&data)
+        } else {
+            EmeiError::RpcError(err_str)
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl ChainClient for AlloyChainClient {
-    async fn send_hot(&self, to: Address, calldata: Bytes) -> Result<B256, EmeiError> {
+    async fn send_hot(
+        &self,
+        to: Address,
+        calldata: Bytes,
+        redis: &RedisClient,
+    ) -> Result<B256, EmeiError> {
         let wallet = EthereumWallet::from(self.hot_wallet.clone());
-        self.send_with_wallet(wallet, to, calldata).await
+        let address_str = format!("0x{}", hex::encode(self.hot_address));
+
+        // Get chain nonce for initialization (only used on first call / after reset)
+        let chain_nonce = self.get_hot_nonce().await?;
+
+        // Acquire next nonce atomically from Redis
+        let nonce = redis.next_nonce(&address_str, chain_nonce).await?;
+
+        match self.send_with_nonce(wallet, to, calldata, nonce).await {
+            Ok(tx_hash) => Ok(tx_hash),
+            Err(e) => {
+                // On nonce-too-low, re-sync Redis from chain and retry once
+                if e.to_string().contains("nonce too low")
+                    || e.to_string().contains("Nonce too low")
+                {
+                    let fresh_nonce = self.get_hot_nonce().await?;
+                    redis.reset_nonce(&address_str, fresh_nonce).await?;
+                    tracing::warn!(
+                        service = "chain",
+                        old_nonce = nonce,
+                        new_nonce = fresh_nonce,
+                        "nonce re-synced from chain"
+                    );
+                    // Don't retry here — let the caller's next cycle handle it
+                }
+                // On other failures, release the nonce so it can be reused
+                else {
+                    let _ = redis.release_nonce(&address_str).await;
+                }
+                Err(e)
+            }
+        }
     }
 
     async fn send_user(
@@ -151,12 +225,18 @@ impl ChainClient for AlloyChainClient {
             Err(_) => Err(EmeiError::RpcTimeout),
         }
     }
+
+    async fn get_hot_nonce(&self) -> Result<u64, EmeiError> {
+        let nonce = self
+            .provider
+            .get_transaction_count(self.hot_address)
+            .await
+            .map_err(|e| EmeiError::RpcError(format!("get_transaction_count: {e}")))?;
+        Ok(nonce)
+    }
 }
 
-/// Attempt to extract revert data bytes from an RPC error string.
-///
-/// Alloy error messages may contain hex-encoded revert data prefixed with "0x".
-/// This function tries to find and decode it.
+/// Attempt to extract hex-encoded revert data from an RPC error message. Returns None if no hex data is found or if it's too short to be valid revert data.
 fn extract_revert_data(err_str: &str) -> Option<Vec<u8>> {
     // Look for a hex-encoded revert data pattern in the error
     // Common patterns: "execution reverted: 0x..." or "revert: 0x..."

@@ -59,6 +59,12 @@ pub struct EmeiConfig {
     /// PostgreSQL connection URL.
     pub database_url: String,
 
+    /// Redis connection URL.
+    pub redis_url: String,
+
+    /// Alchemy webhook signing key (optional — if set, webhook payloads are verified).
+    pub webhook_signing_key: Option<String>,
+
     /// Interval in seconds between receipt batching cycles.
     pub batch_interval: u64,
     /// Interval in seconds between auto-collection cycles.
@@ -97,6 +103,8 @@ impl EmeiConfig {
         let erc8004_address = parse_address(&env_required("EMEI_ERC8004_ADDRESS")?)?;
 
         let database_url = env_required("DATABASE_URL")?;
+        let redis_url = env_required("REDIS_URL")?;
+        let webhook_signing_key = std::env::var("ALCHEMY_WEBHOOK_SIGNING_KEY").ok();
         let batch_interval = env_or_default("EMEI_BATCH_INTERVAL", 30u64);
         let collect_interval = env_or_default("EMEI_COLLECT_INTERVAL", 10u64);
         let overdue_interval = env_or_default("EMEI_OVERDUE_INTERVAL", 60u64);
@@ -111,6 +119,8 @@ impl EmeiConfig {
             erc8004_address,
             hot_wallet_key,
             database_url,
+            redis_url,
+            webhook_signing_key,
             batch_interval,
             collect_interval,
             overdue_interval,

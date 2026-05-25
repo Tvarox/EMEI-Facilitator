@@ -80,8 +80,6 @@ pub struct StatementQueryParams {
     pub limit: Option<u64>,
 }
 
-// ─── Response Types ──────────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize)]
 pub struct TxResponse {
     pub tx_hash: String,
@@ -118,8 +116,6 @@ pub struct VerifyResponse {
     pub verified: bool,
     pub batch_number: u64,
 }
-
-// ─── Validation ──────────────────────────────────────────────────────────────
 
 impl CreateInvoiceRequest {
     pub fn validate(&self) -> Result<(), EmeiError> {

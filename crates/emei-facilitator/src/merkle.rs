@@ -1,7 +1,3 @@
-/// Keccak256-based Merkle tree for receipt batching.
-///
-/// Compatible with OpenZeppelin's `MerkleProof.sol` verification
-/// (sorted pairs before hashing).
 use alloy_primitives::keccak256;
 
 pub struct MerkleTree {
@@ -9,15 +5,11 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
-    /// Create a new Merkle tree from a set of leaf hashes.
-    /// Leaves are sorted for deterministic ordering (OpenZeppelin convention).
     pub fn new(mut leaves: Vec<[u8; 32]>) -> Self {
         leaves.sort();
         Self { leaves }
     }
 
-    /// Compute the Merkle root.
-    /// Returns `[0u8; 32]` for empty trees, the leaf itself for single-leaf trees.
     pub fn root(&self) -> [u8; 32] {
         if self.leaves.is_empty() {
             return [0u8; 32];
@@ -28,14 +20,11 @@ impl MerkleTree {
         compute_root(&self.leaves)
     }
 
-    /// Generate a Merkle inclusion proof for the given leaf.
-    /// Returns `None` if the leaf is not in the tree.
     pub fn proof(&self, leaf: &[u8; 32]) -> Option<Vec<[u8; 32]>> {
         let index = self.leaves.iter().position(|l| l == leaf)?;
         Some(generate_proof(&self.leaves, index))
     }
 
-    /// Verify that a leaf is included in the tree with the given proof.
     pub fn verify(root: &[u8; 32], leaf: &[u8; 32], proof: &[[u8; 32]]) -> bool {
         let mut computed = *leaf;
         for sibling in proof {
@@ -45,8 +34,6 @@ impl MerkleTree {
     }
 }
 
-/// Hash a pair of 32-byte values using sorted pair convention.
-/// Always hashes the smaller value first (matches OpenZeppelin MerkleProof.sol).
 fn hash_pair(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
     let (left, right) = if a <= b { (a, b) } else { (b, a) };
     let mut combined = [0u8; 64];
@@ -55,7 +42,6 @@ fn hash_pair(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
     keccak256(combined).into()
 }
 
-/// Compute root from a layer of hashes (recursive).
 fn compute_root(layer: &[[u8; 32]]) -> [u8; 32] {
     if layer.len() == 1 {
         return layer[0];
@@ -72,7 +58,6 @@ fn compute_root(layer: &[[u8; 32]]) -> [u8; 32] {
     compute_root(&next_layer)
 }
 
-/// Generate proof for a leaf at the given index.
 fn generate_proof(leaves: &[[u8; 32]], index: usize) -> Vec<[u8; 32]> {
     if leaves.len() <= 1 {
         return vec![];

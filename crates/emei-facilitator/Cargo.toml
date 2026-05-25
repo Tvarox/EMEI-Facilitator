@@ -45,7 +45,12 @@ sqlx = { version = "0.8", features = [
     "postgres",
 ] }
 
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
 hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
 dotenvy = { workspace = true }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
