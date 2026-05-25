@@ -139,6 +139,9 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
                     .await;
 
                 // Penalize payer reputation via giveFeedback(payer, invoiceId, 0)
+                // Wait for the markOverdue tx to be processed first
+                tokio::time::sleep(Duration::from_secs(8)).await;
+
                 let feedback_calldata = IBay8004::giveFeedbackCall {
                     subject: invoice.payer,
                     invoiceId: U256::from(id),

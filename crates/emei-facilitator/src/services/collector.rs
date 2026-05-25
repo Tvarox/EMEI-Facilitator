@@ -149,6 +149,9 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
                         state.receipt_queue.push(hash_bytes).await;
 
                         // Positive reputation feedback for payer (paid on time)
+                        // Wait for collect tx to be processed before sending feedback
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+
                         let feedback_calldata = IBay8004::giveFeedbackCall {
                             subject: invoice.payer,
                             invoiceId: U256::from(id),
