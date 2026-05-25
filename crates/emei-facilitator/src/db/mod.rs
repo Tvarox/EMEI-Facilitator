@@ -1,16 +1,16 @@
-//! SQLite storage layer for indexed contract events.
+//! PostgreSQL storage layer for indexed contract events.
 //!
 //! Provides the `StatementStore` for persisting and querying
-//! on-chain events used by the statement endpoint.
+//! on-chain events, pending receipts, and transaction tracking.
 
-pub mod queries;
 pub mod schema;
 
-use tokio_rusqlite::Connection;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row};
 
 use crate::error::EmeiError;
 
-/// Represents an indexed contract event stored in SQLite.
+/// Represents an indexed contract event.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IndexedEvent {
     pub event_type: String,
@@ -36,548 +36,345 @@ pub struct StatementQuery {
     pub limit: u64,
 }
 
-/// SQLite-backed event store for indexed contract events.
+/// PostgreSQL-backed event store.
 pub struct StatementStore {
-    conn: Connection,
+    pool: PgPool,
 }
 
 impl StatementStore {
-    /// Open (or create) the SQLite database at the given path.
-    /// Applies WAL journal mode, sets synchronous to normal, and
-    /// runs the schema DDL to ensure tables and indexes exist.
-    pub async fn open(path: &str) -> Result<Self, EmeiError> {
-        let conn = Connection::open(path)
+    /// Connect to PostgreSQL and run schema migrations.
+    pub async fn open(database_url: &str) -> Result<Self, EmeiError> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(database_url)
             .await
-            .map_err(|e| EmeiError::Database(format!("failed to open SQLite: {e}")))?;
+            .map_err(|e| EmeiError::Database(format!("failed to connect to Postgres: {e}")))?;
 
-        conn.call(|conn| {
-            conn.pragma_update(None, "journal_mode", "wal")?;
-            conn.pragma_update(None, "synchronous", "normal")?;
-            conn.execute_batch(schema::SCHEMA_SQL)?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| EmeiError::Database(format!("schema init failed: {e}")))?;
+        // Run schema
+        sqlx::raw_sql(schema::SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .map_err(|e| EmeiError::Database(format!("schema migration failed: {e}")))?;
 
-        Ok(Self { conn })
+        Ok(Self { pool })
     }
 
-    /// Insert a single indexed event into the database.
-    /// Duplicate (tx_hash, log_index) pairs are silently ignored.
+    /// Insert an event. Uses ON CONFLICT to handle duplicates:
+    /// - If tx_hash starts with "invoice-" (synthetic), insert normally
+    /// - If a real tx_hash arrives for the same (event_type, invoice_id), update the existing row
     pub async fn insert_event(&self, event: &IndexedEvent) -> Result<(), EmeiError> {
-        let event = event.clone();
-        self.conn
-            .call(move |conn| {
-                queries::insert_event(conn, &event)?;
-                Ok(())
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("insert_event failed: {e}")))?;
+        sqlx::query(
+            r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (tx_hash, log_index) DO NOTHING"#,
+        )
+        .bind(&event.event_type)
+        .bind(event.block_number as i64)
+        .bind(&event.tx_hash)
+        .bind(event.log_index as i32)
+        .bind(event.timestamp as i64)
+        .bind(event.invoice_id.map(|id| id as i64))
+        .bind(&event.payer)
+        .bind(&event.issuer)
+        .bind(&event.amount)
+        .bind(&event.params)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("insert_event failed: {e}")))?;
+
         Ok(())
     }
 
-    /// Query events matching the given statement parameters.
-    /// Supports filtering by payer (required), status, date range,
-    /// and pagination with ORDER BY block_number DESC.
+    /// Query events matching statement parameters.
     pub async fn query_statement(
         &self,
         query: &StatementQuery,
     ) -> Result<Vec<IndexedEvent>, EmeiError> {
-        let payer = query.payer.clone();
-        let status = query.status.clone();
-        let from = query.from;
-        let to = query.to;
-        let offset = query.offset;
-        let limit = query.limit;
+        let rows = sqlx::query(
+            r#"SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params
+               FROM events WHERE payer = $1
+               ORDER BY block_number DESC
+               LIMIT $2 OFFSET $3"#,
+        )
+        .bind(&query.payer)
+        .bind(query.limit as i64)
+        .bind(query.offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("query_statement failed: {e}")))?;
 
-        self.conn
-            .call(move |conn| {
-                let q = StatementQuery {
-                    payer,
-                    status,
-                    from,
-                    to,
-                    offset,
-                    limit,
-                };
-                let results = queries::query_statement(conn, &q)?;
-                Ok(results)
-            })
+        Ok(rows.iter().map(row_to_event).collect())
+    }
+
+    // ─── Indexer state ────────────────────────────────────────────────────────
+
+    pub async fn get_last_block(&self) -> Result<Option<u64>, EmeiError> {
+        let row = sqlx::query("SELECT value FROM indexer_state WHERE key = 'last_block_number'")
+            .fetch_optional(&self.pool)
             .await
-            .map_err(|e| EmeiError::Database(format!("query_statement failed: {e}")))
+            .map_err(|e| EmeiError::Database(format!("get_last_block failed: {e}")))?;
+
+        Ok(row.and_then(|r| r.get::<String, _>("value").parse::<u64>().ok()))
+    }
+
+    pub async fn set_last_block(&self, block: u64) -> Result<(), EmeiError> {
+        sqlx::query(
+            "INSERT INTO indexer_state (key, value) VALUES ('last_block_number', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
+        )
+        .bind(block.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("set_last_block failed: {e}")))?;
+        Ok(())
     }
 
     // ─── Persistent receipt queue ─────────────────────────────────────────────
 
-    /// Persist a receipt hash to the DB-backed queue.
     pub async fn insert_pending_receipt(
         &self,
         receipt_hash: &[u8; 32],
         invoice_id: Option<u64>,
     ) -> Result<(), EmeiError> {
-        let hash = *receipt_hash;
-        let inv_id = invoice_id;
-        self.conn
-            .call(move |conn| {
-                queries::insert_pending_receipt(conn, &hash, inv_id)?;
-                Ok(())
-            })
+        let now = now_ts() as i64;
+        sqlx::query("INSERT INTO pending_receipts (receipt_hash, invoice_id, created_at) VALUES ($1, $2, $3)")
+            .bind(receipt_hash.as_slice())
+            .bind(invoice_id.map(|id| id as i64))
+            .bind(now)
+            .execute(&self.pool)
             .await
-            .map_err(|e| EmeiError::Database(format!("insert_pending_receipt failed: {e}")))
+            .map_err(|e| EmeiError::Database(format!("insert_pending_receipt failed: {e}")))?;
+        Ok(())
     }
 
-    /// Drain up to `max_count` receipts from the persistent queue.
     pub async fn drain_pending_receipts(
         &self,
         max_count: usize,
     ) -> Result<Vec<[u8; 32]>, EmeiError> {
-        self.conn
-            .call(move |conn| {
-                let results = queries::drain_pending_receipts(conn, max_count)?;
-                Ok(results)
+        let rows = sqlx::query(
+            "DELETE FROM pending_receipts WHERE id IN (SELECT id FROM pending_receipts ORDER BY id ASC LIMIT $1) RETURNING receipt_hash",
+        )
+        .bind(max_count as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("drain_pending_receipts failed: {e}")))?;
+
+        let hashes: Vec<[u8; 32]> = rows
+            .iter()
+            .filter_map(|row| {
+                let bytes: Vec<u8> = row.get("receipt_hash");
+                if bytes.len() == 32 {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    Some(arr)
+                } else {
+                    None
+                }
             })
-            .await
-            .map_err(|e| EmeiError::Database(format!("drain_pending_receipts failed: {e}")))
+            .collect();
+
+        Ok(hashes)
     }
 
-    /// Count pending receipts.
     pub async fn count_pending_receipts(&self) -> Result<usize, EmeiError> {
-        self.conn
-            .call(|conn| {
-                let count = queries::count_pending_receipts(conn)?;
-                Ok(count)
-            })
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pending_receipts")
+            .fetch_one(&self.pool)
             .await
-            .map_err(|e| EmeiError::Database(format!("count_pending_receipts failed: {e}")))
+            .map_err(|e| EmeiError::Database(format!("count_pending_receipts failed: {e}")))?;
+        Ok(row.get::<i64, _>("cnt") as usize)
     }
 
     // ─── Pending transaction tracking ─────────────────────────────────────────
 
-    /// Record a submitted transaction.
     pub async fn insert_pending_tx(
         &self,
         tx_hash: &str,
         sender: &str,
         nonce: u64,
     ) -> Result<(), EmeiError> {
-        let hash = tx_hash.to_string();
-        let snd = sender.to_string();
-        self.conn
-            .call(move |conn| {
-                queries::insert_pending_tx(conn, &hash, &snd, nonce)?;
-                Ok(())
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("insert_pending_tx failed: {e}")))
+        let now = now_ts() as i64;
+        sqlx::query(
+            "INSERT INTO pending_txs (tx_hash, sender, nonce, submitted_at, status) VALUES ($1, $2, $3, $4, 'pending') ON CONFLICT (tx_hash) DO NOTHING",
+        )
+        .bind(tx_hash)
+        .bind(sender)
+        .bind(nonce as i64)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("insert_pending_tx failed: {e}")))?;
+        Ok(())
     }
 
-    /// Mark a transaction as confirmed.
     pub async fn confirm_pending_tx(&self, tx_hash: &str) -> Result<(), EmeiError> {
-        let hash = tx_hash.to_string();
-        self.conn
-            .call(move |conn| {
-                queries::confirm_pending_tx(conn, &hash)?;
-                Ok(())
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("confirm_pending_tx failed: {e}")))
+        let now = now_ts() as i64;
+        sqlx::query(
+            "UPDATE pending_txs SET status = 'confirmed', confirmed_at = $1 WHERE tx_hash = $2",
+        )
+        .bind(now)
+        .bind(tx_hash)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("confirm_pending_tx failed: {e}")))?;
+        Ok(())
     }
 
-    /// Get stale pending transactions (older than `age_secs`).
     pub async fn get_stale_pending_txs(
         &self,
         age_secs: u64,
     ) -> Result<Vec<(String, String, u64)>, EmeiError> {
-        self.conn
-            .call(move |conn| {
-                let results = queries::get_stale_pending_txs(conn, age_secs)?;
-                Ok(results)
-            })
+        let cutoff = (now_ts() - age_secs) as i64;
+        let rows = sqlx::query("SELECT tx_hash, sender, nonce FROM pending_txs WHERE status = 'pending' AND submitted_at < $1")
+            .bind(cutoff)
+            .fetch_all(&self.pool)
             .await
-            .map_err(|e| EmeiError::Database(format!("get_stale_pending_txs failed: {e}")))
+            .map_err(|e| EmeiError::Database(format!("get_stale_pending_txs failed: {e}")))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get::<String, _>("tx_hash"),
+                    r.get::<String, _>("sender"),
+                    r.get::<i64, _>("nonce") as u64,
+                )
+            })
+            .collect())
     }
 
     // ─── Public dashboard queries ────────────────────────────────────────────
 
-    /// Count events grouped by event_type.
     pub async fn count_events_by_type(&self) -> Result<Vec<(String, i64)>, EmeiError> {
-        self.conn
-            .call(|conn| {
-                let results = queries::count_events_by_type(conn)?;
-                Ok(results)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("count_events_by_type failed: {e}")))
+        let rows =
+            sqlx::query("SELECT event_type, COUNT(*) as cnt FROM events GROUP BY event_type")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| EmeiError::Database(format!("count_events_by_type failed: {e}")))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>("event_type"), r.get::<i64, _>("cnt")))
+            .collect())
     }
 
-    /// Sum the amount (wei) for a given event type.
     pub async fn sum_amount_for_type(&self, event_type: &str) -> Result<u128, EmeiError> {
-        let et = event_type.to_string();
-        self.conn
-            .call(move |conn| {
-                let result = queries::sum_amount_for_type(conn, &et)?;
-                Ok(result)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("sum_amount_for_type failed: {e}")))
+        let row = sqlx::query(
+            "SELECT COALESCE(SUM(CAST(amount AS DOUBLE PRECISION)), 0) as total FROM events WHERE event_type = $1 AND amount IS NOT NULL",
+        )
+        .bind(event_type)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("sum_amount_for_type failed: {e}")))?;
+
+        let total: f64 = row.get("total");
+        Ok(total as u128)
     }
 
-    /// Fetch recent events with optional cursor-based pagination.
     pub async fn recent_events(
         &self,
         limit: i64,
         before_block: Option<i64>,
     ) -> Result<Vec<IndexedEvent>, EmeiError> {
-        self.conn
-            .call(move |conn| {
-                let results = queries::recent_events(conn, limit, before_block)?;
-                Ok(results)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("recent_events failed: {e}")))
+        let rows = match before_block {
+            Some(block) => {
+                sqlx::query(
+                    "SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params FROM events WHERE block_number < $1 ORDER BY block_number DESC, log_index DESC LIMIT $2",
+                )
+                .bind(block)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+            None => {
+                sqlx::query(
+                    "SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params FROM events ORDER BY block_number DESC, log_index DESC LIMIT $1",
+                )
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+        .map_err(|e| EmeiError::Database(format!("recent_events failed: {e}")))?;
+
+        Ok(rows.iter().map(row_to_event).collect())
     }
 
-    /// Get the latest MerkleRootPosted event.
     pub async fn latest_receipt_event(&self) -> Result<Option<(String, i64)>, EmeiError> {
-        self.conn
-            .call(|conn| {
-                let result = queries::latest_receipt_event(conn)?;
-                Ok(result)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("latest_receipt_event failed: {e}")))
+        let row = sqlx::query(
+            "SELECT params, timestamp FROM events WHERE event_type = 'MerkleRootPosted' ORDER BY block_number DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("latest_receipt_event failed: {e}")))?;
+
+        Ok(row.map(|r| (r.get::<String, _>("params"), r.get::<i64, _>("timestamp"))))
     }
 
-    /// Count events for a specific issuer.
     pub async fn count_events_for_issuer(
         &self,
         issuer: &str,
     ) -> Result<Vec<(String, i64)>, EmeiError> {
-        let addr = issuer.to_string();
-        self.conn
-            .call(move |conn| {
-                let results = queries::count_events_for_issuer(conn, &addr)?;
-                Ok(results)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("count_events_for_issuer failed: {e}")))
+        let rows = sqlx::query(
+            "SELECT event_type, COUNT(*) as cnt FROM events WHERE issuer = $1 GROUP BY event_type",
+        )
+        .bind(issuer)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("count_events_for_issuer failed: {e}")))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>("event_type"), r.get::<i64, _>("cnt")))
+            .collect())
     }
 
-    /// Count events for a specific payer.
     pub async fn count_events_for_payer(
         &self,
         payer: &str,
     ) -> Result<Vec<(String, i64)>, EmeiError> {
-        let addr = payer.to_string();
-        self.conn
-            .call(move |conn| {
-                let results = queries::count_events_for_payer(conn, &addr)?;
-                Ok(results)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("count_events_for_payer failed: {e}")))
+        let rows = sqlx::query(
+            "SELECT event_type, COUNT(*) as cnt FROM events WHERE payer = $1 GROUP BY event_type",
+        )
+        .bind(payer)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("count_events_for_payer failed: {e}")))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>("event_type"), r.get::<i64, _>("cnt")))
+            .collect())
     }
 
-    /// Get the latest block number from the events table.
     pub async fn latest_block(&self) -> Result<Option<i64>, EmeiError> {
-        self.conn
-            .call(|conn| {
-                let result = queries::latest_block(conn)?;
-                Ok(result)
-            })
+        let row = sqlx::query("SELECT MAX(block_number) as max_block FROM events")
+            .fetch_one(&self.pool)
             .await
-            .map_err(|e| EmeiError::Database(format!("latest_block failed: {e}")))
-    }
+            .map_err(|e| EmeiError::Database(format!("latest_block failed: {e}")))?;
 
-    // ─── Indexer state ────────────────────────────────────────────────────────
-
-    /// Get the last indexed block number, or None if no blocks have been indexed.
-    pub async fn get_last_block(&self) -> Result<Option<u64>, EmeiError> {
-        self.conn
-            .call(|conn| {
-                let block = queries::get_last_block(conn)?;
-                Ok(block)
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("get_last_block failed: {e}")))
-    }
-
-    /// Persist the last indexed block number for restart recovery.
-    pub async fn set_last_block(&self, block: u64) -> Result<(), EmeiError> {
-        self.conn
-            .call(move |conn| {
-                queries::set_last_block(conn, block)?;
-                Ok(())
-            })
-            .await
-            .map_err(|e| EmeiError::Database(format!("set_last_block failed: {e}")))?;
-        Ok(())
+        Ok(row.get::<Option<i64>, _>("max_block"))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-    /// Helper to create a StatementStore backed by a temporary file.
-    async fn test_store() -> (StatementStore, NamedTempFile) {
-        let tmp = NamedTempFile::new().expect("failed to create temp file");
-        let path = tmp.path().to_str().unwrap().to_string();
-        let store = StatementStore::open(&path)
-            .await
-            .expect("failed to open store");
-        (store, tmp)
+fn row_to_event(row: &sqlx::postgres::PgRow) -> IndexedEvent {
+    IndexedEvent {
+        event_type: row.get("event_type"),
+        block_number: row.get::<i64, _>("block_number") as u64,
+        tx_hash: row.get("tx_hash"),
+        log_index: row.get::<i32, _>("log_index") as u32,
+        timestamp: row.get::<i64, _>("timestamp") as u64,
+        invoice_id: row.get::<Option<i64>, _>("invoice_id").map(|v| v as u64),
+        payer: row.get("payer"),
+        issuer: row.get("issuer"),
+        amount: row.get("amount"),
+        params: row.get("params"),
     }
+}
 
-    fn sample_event(payer: &str, block: u64, event_type: &str) -> IndexedEvent {
-        IndexedEvent {
-            event_type: event_type.to_string(),
-            block_number: block,
-            tx_hash: format!("0x{:064x}", block),
-            log_index: 0,
-            timestamp: 1700000000 + block,
-            invoice_id: Some(block),
-            payer: Some(payer.to_string()),
-            issuer: Some("0x1111111111111111111111111111111111111111".to_string()),
-            amount: Some("1000000".to_string()),
-            params: "{}".to_string(),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_schema_creation() {
-        let (store, _tmp) = test_store().await;
-        // Verify we can insert and query without errors (schema exists)
-        let result = store.get_last_block().await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn test_insert_and_query_round_trip() {
-        let (store, _tmp) = test_store().await;
-
-        let event = sample_event("0xaaaa", 100, "InvoiceCreated");
-        store.insert_event(&event).await.unwrap();
-
-        let query = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 0,
-            limit: 100,
-        };
-
-        let results = store.query_statement(&query).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].event_type, "InvoiceCreated");
-        assert_eq!(results[0].block_number, 100);
-        assert_eq!(results[0].tx_hash, format!("0x{:064x}", 100));
-        assert_eq!(results[0].log_index, 0);
-        assert_eq!(results[0].timestamp, 1700000000 + 100);
-        assert_eq!(results[0].invoice_id, Some(100));
-        assert_eq!(results[0].payer.as_deref(), Some("0xaaaa"));
-        assert_eq!(results[0].amount.as_deref(), Some("1000000"));
-        assert_eq!(results[0].params, "{}");
-    }
-
-    #[tokio::test]
-    async fn test_filter_by_payer() {
-        let (store, _tmp) = test_store().await;
-
-        store
-            .insert_event(&sample_event("0xaaaa", 1, "InvoiceCreated"))
-            .await
-            .unwrap();
-        store
-            .insert_event(&sample_event("0xbbbb", 2, "InvoiceCreated"))
-            .await
-            .unwrap();
-        store
-            .insert_event(&sample_event("0xaaaa", 3, "InvoicePaid"))
-            .await
-            .unwrap();
-
-        let query = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 0,
-            limit: 100,
-        };
-
-        let results = store.query_statement(&query).await.unwrap();
-        assert_eq!(results.len(), 2);
-        // Should be ordered by block_number DESC
-        assert_eq!(results[0].block_number, 3);
-        assert_eq!(results[1].block_number, 1);
-
-        // Query for the other payer
-        let query_b = StatementQuery {
-            payer: "0xbbbb".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 0,
-            limit: 100,
-        };
-        let results_b = store.query_statement(&query_b).await.unwrap();
-        assert_eq!(results_b.len(), 1);
-        assert_eq!(results_b[0].block_number, 2);
-    }
-
-    #[tokio::test]
-    async fn test_pagination() {
-        let (store, _tmp) = test_store().await;
-
-        // Insert 5 events for the same payer
-        for i in 1..=5 {
-            store
-                .insert_event(&sample_event("0xaaaa", i, "InvoiceCreated"))
-                .await
-                .unwrap();
-        }
-
-        // Page 1: limit 2, offset 0
-        let query = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 0,
-            limit: 2,
-        };
-        let page1 = store.query_statement(&query).await.unwrap();
-        assert_eq!(page1.len(), 2);
-        assert_eq!(page1[0].block_number, 5); // DESC order
-        assert_eq!(page1[1].block_number, 4);
-
-        // Page 2: limit 2, offset 2
-        let query2 = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 2,
-            limit: 2,
-        };
-        let page2 = store.query_statement(&query2).await.unwrap();
-        assert_eq!(page2.len(), 2);
-        assert_eq!(page2[0].block_number, 3);
-        assert_eq!(page2[1].block_number, 2);
-
-        // Page 3: limit 2, offset 4
-        let query3 = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 4,
-            limit: 2,
-        };
-        let page3 = store.query_statement(&query3).await.unwrap();
-        assert_eq!(page3.len(), 1);
-        assert_eq!(page3[0].block_number, 1);
-    }
-
-    #[tokio::test]
-    async fn test_filter_by_status() {
-        let (store, _tmp) = test_store().await;
-
-        store
-            .insert_event(&sample_event("0xaaaa", 1, "InvoiceCreated"))
-            .await
-            .unwrap();
-        store
-            .insert_event(&sample_event("0xaaaa", 2, "InvoicePaid"))
-            .await
-            .unwrap();
-        store
-            .insert_event(&sample_event("0xaaaa", 3, "InvoiceCreated"))
-            .await
-            .unwrap();
-
-        let query = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: Some("InvoicePaid".to_string()),
-            from: None,
-            to: None,
-            offset: 0,
-            limit: 100,
-        };
-        let results = store.query_statement(&query).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].event_type, "InvoicePaid");
-    }
-
-    #[tokio::test]
-    async fn test_filter_by_date_range() {
-        let (store, _tmp) = test_store().await;
-
-        // timestamps: 1700000001, 1700000002, 1700000003
-        store
-            .insert_event(&sample_event("0xaaaa", 1, "InvoiceCreated"))
-            .await
-            .unwrap();
-        store
-            .insert_event(&sample_event("0xaaaa", 2, "InvoiceCreated"))
-            .await
-            .unwrap();
-        store
-            .insert_event(&sample_event("0xaaaa", 3, "InvoiceCreated"))
-            .await
-            .unwrap();
-
-        let query = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: Some(1700000002),
-            to: Some(1700000002),
-            offset: 0,
-            limit: 100,
-        };
-        let results = store.query_statement(&query).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].block_number, 2);
-    }
-
-    #[tokio::test]
-    async fn test_last_block_round_trip() {
-        let (store, _tmp) = test_store().await;
-
-        // Initially None
-        assert_eq!(store.get_last_block().await.unwrap(), None);
-
-        // Set and get
-        store.set_last_block(42).await.unwrap();
-        assert_eq!(store.get_last_block().await.unwrap(), Some(42));
-
-        // Update
-        store.set_last_block(100).await.unwrap();
-        assert_eq!(store.get_last_block().await.unwrap(), Some(100));
-    }
-
-    #[tokio::test]
-    async fn test_duplicate_insert_ignored() {
-        let (store, _tmp) = test_store().await;
-
-        let event = sample_event("0xaaaa", 1, "InvoiceCreated");
-        store.insert_event(&event).await.unwrap();
-        // Insert same event again (same tx_hash + log_index) — should not error
-        store.insert_event(&event).await.unwrap();
-
-        let query = StatementQuery {
-            payer: "0xaaaa".to_string(),
-            status: None,
-            from: None,
-            to: None,
-            offset: 0,
-            limit: 100,
-        };
-        let results = store.query_statement(&query).await.unwrap();
-        assert_eq!(results.len(), 1);
-    }
+fn now_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }

@@ -38,10 +38,15 @@ alloy-signer-local = { version = "1.4" }
 alloy-contract = { version = "1.4" }
 alloy-sol-types = { version = "1.4", features = ["json"] }
 
-tokio-rusqlite = "0.6"
+# Database
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+] }
+
 hex = "0.4"
 dotenvy = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

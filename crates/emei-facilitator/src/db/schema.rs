@@ -1,28 +1,27 @@
-//! DDL constants for the EMEI SQLite database schema.
+//! PostgreSQL schema DDL for the EMEI database.
 
-/// SQL statements to create the events table, indexes, and indexer state table.
-/// Uses `IF NOT EXISTS` so it is safe to run on every startup.
+/// SQL to create all tables and indexes. Safe to run multiple times (IF NOT EXISTS).
 pub const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
-    block_number INTEGER NOT NULL,
+    block_number BIGINT NOT NULL,
     tx_hash TEXT NOT NULL,
     log_index INTEGER NOT NULL,
-    timestamp INTEGER NOT NULL,
-    invoice_id INTEGER,
+    timestamp BIGINT NOT NULL,
+    invoice_id BIGINT,
     payer TEXT,
     issuer TEXT,
     amount TEXT,
-    params TEXT NOT NULL,
+    params TEXT NOT NULL DEFAULT '{}',
     UNIQUE(tx_hash, log_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_payer ON events(payer);
 CREATE INDEX IF NOT EXISTS idx_events_issuer ON events(issuer);
 CREATE INDEX IF NOT EXISTS idx_events_invoice_id ON events(invoice_id);
-CREATE INDEX IF NOT EXISTS idx_events_block_number ON events(block_number);
-CREATE INDEX IF NOT EXISTS idx_events_type_payer ON events(event_type, payer);
+CREATE INDEX IF NOT EXISTS idx_events_block_number ON events(block_number DESC);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 
 CREATE TABLE IF NOT EXISTS indexer_state (
     key TEXT PRIMARY KEY,
@@ -30,19 +29,19 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 );
 
 CREATE TABLE IF NOT EXISTS pending_receipts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    receipt_hash BLOB NOT NULL,
-    invoice_id INTEGER,
-    created_at INTEGER NOT NULL
+    id BIGSERIAL PRIMARY KEY,
+    receipt_hash BYTEA NOT NULL,
+    invoice_id BIGINT,
+    created_at BIGINT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pending_txs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     tx_hash TEXT NOT NULL UNIQUE,
     sender TEXT NOT NULL,
-    nonce INTEGER NOT NULL,
-    submitted_at INTEGER NOT NULL,
-    confirmed_at INTEGER,
+    nonce BIGINT NOT NULL,
+    submitted_at BIGINT NOT NULL,
+    confirmed_at BIGINT,
     status TEXT NOT NULL DEFAULT 'pending'
 );
 "#;
