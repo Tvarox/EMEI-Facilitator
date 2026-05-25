@@ -98,6 +98,7 @@ async fn backfill(state: &AppState) -> Result<(), EmeiError> {
                 issuer: Some(issuer.clone()),
                 amount: Some(amount.clone()),
                 params: "{}".to_string(),
+            status: "pending".to_string(),
             })
             .await;
 
@@ -117,6 +118,7 @@ async fn backfill(state: &AppState) -> Result<(), EmeiError> {
                     issuer: Some(issuer.clone()),
                     amount: Some(amount.clone()),
                     params: "{}".to_string(),
+            status: "pending".to_string(),
                 })
                 .await;
         }
@@ -136,6 +138,7 @@ async fn backfill(state: &AppState) -> Result<(), EmeiError> {
                     issuer: Some(issuer.clone()),
                     amount: Some(amount.clone()),
                     params: "{}".to_string(),
+            status: "pending".to_string(),
                 })
                 .await;
         }
@@ -155,6 +158,7 @@ async fn backfill(state: &AppState) -> Result<(), EmeiError> {
                     issuer: Some(issuer.clone()),
                     amount: Some(amount.clone()),
                     params: "{}".to_string(),
+            status: "pending".to_string(),
                 })
                 .await;
         }

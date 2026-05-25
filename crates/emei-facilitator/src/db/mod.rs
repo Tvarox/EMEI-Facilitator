@@ -20,6 +20,7 @@ pub struct IndexedEvent {
     pub issuer: Option<String>,
     pub amount: Option<String>,
     pub params: String,
+    pub status: String,
 }
 
 #[derive(Debug)]
@@ -120,7 +121,7 @@ impl StatementStore {
         query: &StatementQuery,
     ) -> Result<Vec<IndexedEvent>, EmeiError> {
         let rows = sqlx::query(
-            r#"SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params
+            r#"SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status
                FROM events WHERE payer = $1
                ORDER BY block_number DESC
                LIMIT $2 OFFSET $3"#,
@@ -305,7 +306,7 @@ impl StatementStore {
         let rows = match before_block {
             Some(block) => {
                 sqlx::query(
-                    "SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params FROM events WHERE block_number < $1 ORDER BY block_number DESC, log_index DESC LIMIT $2",
+                    "SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status FROM events WHERE block_number < $1 ORDER BY block_number DESC, log_index DESC LIMIT $2",
                 )
                 .bind(block)
                 .bind(limit)
@@ -314,7 +315,7 @@ impl StatementStore {
             }
             None => {
                 sqlx::query(
-                    "SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params FROM events ORDER BY block_number DESC, log_index DESC LIMIT $1",
+                    "SELECT event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status FROM events ORDER BY block_number DESC, log_index DESC LIMIT $1",
                 )
                 .bind(limit)
                 .fetch_all(&self.pool)
@@ -435,6 +436,51 @@ impl StatementStore {
         .map_err(|e| EmeiError::Database(format!("has_event_for_invoice failed: {e}")))?;
         Ok(row.get::<i64, _>("cnt") > 0)
     }
+
+    /// Promote a pending (optimistic) event to confirmed by updating it in-place with
+    /// the real on-chain tx_hash, block_number, and enriched fields. Returns true if a
+    /// pending row was found and updated, false if none existed (caller should insert fresh).
+    pub async fn confirm_pending_event_for_invoice(
+        &self,
+        invoice_id: u64,
+        event_type: &str,
+        real_tx_hash: &str,
+        block_number: u64,
+        log_index: u32,
+        timestamp: u64,
+        payer: Option<&str>,
+        issuer: Option<&str>,
+        amount: Option<&str>,
+    ) -> Result<bool, EmeiError> {
+        let result = sqlx::query(
+            r#"UPDATE events
+               SET tx_hash = $1, block_number = $2, log_index = $3, timestamp = $4,
+                   status = 'confirmed',
+                   payer = COALESCE($5, payer),
+                   issuer = COALESCE($6, issuer),
+                   amount = COALESCE($7, amount)
+               WHERE id = (
+                   SELECT id FROM events
+                   WHERE invoice_id = $8 AND event_type = $9 AND status = 'pending'
+                   LIMIT 1
+               )"#,
+        )
+        .bind(real_tx_hash)
+        .bind(block_number as i64)
+        .bind(log_index as i32)
+        .bind(timestamp as i64)
+        .bind(payer)
+        .bind(issuer)
+        .bind(amount)
+        .bind(invoice_id as i64)
+        .bind(event_type)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            EmeiError::Database(format!("confirm_pending_event_for_invoice failed: {e}"))
+        })?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -451,6 +497,7 @@ fn row_to_event(row: &sqlx::postgres::PgRow) -> IndexedEvent {
         issuer: row.get("issuer"),
         amount: row.get("amount"),
         params: row.get("params"),
+        status: row.get("status"),
     }
 }
 
