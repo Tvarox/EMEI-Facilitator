@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS events (
     UNIQUE(tx_hash, log_index)
 );
 
+-- Add status column if table was created before this migration
+ALTER TABLE events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'confirmed';
+
 CREATE INDEX IF NOT EXISTS idx_events_payer ON events(payer);
 CREATE INDEX IF NOT EXISTS idx_events_issuer ON events(issuer);
 CREATE INDEX IF NOT EXISTS idx_events_invoice_id ON events(invoice_id);
