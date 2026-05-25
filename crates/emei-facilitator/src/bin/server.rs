@@ -47,8 +47,8 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // Open SQLite store
-    let db = StatementStore::open(&config.sqlite_path)
+    // Open PostgreSQL store
+    let db = StatementStore::open(&config.database_url)
         .await
         .unwrap_or_else(|e| {
             eprintln!("Failed to open database: {e}");

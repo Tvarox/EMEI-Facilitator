@@ -56,8 +56,8 @@ pub struct EmeiConfig {
     /// Private key for the hot wallet used by background services.
     pub hot_wallet_key: B256,
 
-    /// Path to the SQLite database file.
-    pub sqlite_path: String,
+    /// PostgreSQL connection URL.
+    pub database_url: String,
 
     /// Interval in seconds between receipt batching cycles.
     pub batch_interval: u64,
@@ -96,7 +96,7 @@ impl EmeiConfig {
         let bay8004_address = parse_address(&env_required("EMEI_BAY8004_ADDRESS")?)?;
         let erc8004_address = parse_address(&env_required("EMEI_ERC8004_ADDRESS")?)?;
 
-        let sqlite_path = env_or_default("EMEI_SQLITE_PATH", "./emei.db".to_string());
+        let database_url = env_required("DATABASE_URL")?;
         let batch_interval = env_or_default("EMEI_BATCH_INTERVAL", 30u64);
         let collect_interval = env_or_default("EMEI_COLLECT_INTERVAL", 10u64);
         let overdue_interval = env_or_default("EMEI_OVERDUE_INTERVAL", 60u64);
@@ -110,7 +110,7 @@ impl EmeiConfig {
             bay8004_address,
             erc8004_address,
             hot_wallet_key,
-            sqlite_path,
+            database_url,
             batch_interval,
             collect_interval,
             overdue_interval,
