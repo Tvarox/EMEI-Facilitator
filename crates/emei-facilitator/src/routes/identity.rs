@@ -1,17 +1,16 @@
-//! Identity route handler: POST /register
-
+// Route handlers for identity-related endpoints in the EMEI Facilitator API.
 use std::sync::Arc;
 
 use alloy_primitives::U256;
 use alloy_sol_types::SolCall;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode, Json};
 
 use crate::{
     contracts::erc8004::IMockERC8004, error::EmeiError, signing::UserSigner, state::AppState,
     types::*,
 };
 
-/// POST /emei/register — Register an identity in the ERC-8004 registry.
+/// POST /identity/register - Register a new identity on the ERC-8004 contract, optionally with an initial score.
 pub async fn register_identity(
     State(state): State<Arc<AppState>>,
     signer: UserSigner,

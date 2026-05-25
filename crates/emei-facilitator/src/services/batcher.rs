@@ -1,11 +1,4 @@
-//! Receipt batcher service.
-//!
-//! Periodically drains pending receipt hashes from the persistent DB queue,
-//! builds a Merkle tree, and posts the root on-chain via the EMEIReceipt contract.
-//!
-//! Receipts are persisted to DB BEFORE being acknowledged, so a crash between
-//! collection and batching does not lose receipts.
-
+/// Background service that batches pending receipt hashes into a Merkle tree and posts the root on-chain at a configurable interval (default 30s).
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,10 +14,7 @@ use crate::state::AppState;
 /// Maximum receipts per Merkle batch. Keeps gas costs bounded.
 const MAX_BATCH_SIZE: usize = 500;
 
-/// Background service that batches pending receipt hashes into a Merkle tree
-/// and posts the root on-chain at a configurable interval (default 30s).
-///
-/// Reads from the persistent `pending_receipts` DB table, not in-memory queue.
+/// Background task that runs a loop to batch pending receipts and post Merkle roots on-chain.
 pub async fn receipt_batcher(state: Arc<AppState>, cancel: CancellationToken) {
     let interval = Duration::from_secs(state.config.batch_interval);
     let mut ticker = tokio::time::interval(interval);
@@ -108,7 +98,7 @@ async fn flush_batch(state: &AppState, batch_number: &mut u64) -> Result<(), Eme
 
     match state
         .chain
-        .send_hot(state.config.receipt_address, calldata.into())
+        .send_hot(state.config.receipt_address, calldata.into(), &state.redis)
         .await
     {
         Ok(tx_hash) => {

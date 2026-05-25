@@ -1,6 +1,4 @@
-//! Health check endpoint: GET /health
-//!
-//! Reports system status for load balancers and monitoring.
+// Health check route for EMEI Facilitator
 
 use std::sync::Arc;
 
@@ -20,12 +18,9 @@ pub struct HealthResponse {
     pub chain_id: u64,
 }
 
-/// GET /health — System health check.
-///
-/// Returns 200 with status "healthy" if RPC and DB are reachable.
-/// Returns 200 with status "degraded" if either is down (still serves reads).
+/// Health check endpoint to verify the status of the EMEI Facilitator server and its dependencies.
 pub async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    // Check RPC: try a simple call (getInvoiceCount is cheap)
+    // Check if the Ethereum RPC is reachable by making a simple call to get the invoice count.
     let rpc_reachable = state
         .chain
         .call(
@@ -38,14 +33,14 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResp
         .await
         .is_ok();
 
-    // Check DB: try reading last block
+    // Check if the database is writable by attempting to get the last indexed block number.
     let (db_writable, last_indexed_id) = match state.db.get_last_block().await {
         Ok(Some(block)) => (true, block),
         Ok(None) => (true, 0),
         Err(_) => (false, 0),
     };
 
-    // Check receipt queue
+    // Get the number of pending receipts in the queue.
     let pending_receipts = state.receipt_queue.len().await;
 
     let status = if rpc_reachable && db_writable {

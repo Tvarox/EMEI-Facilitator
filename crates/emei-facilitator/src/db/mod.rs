@@ -1,7 +1,4 @@
 //! PostgreSQL storage layer for indexed contract events.
-//!
-//! Provides the `StatementStore` for persisting and querying
-//! on-chain events, pending receipts, and transaction tracking.
 
 pub mod schema;
 
@@ -10,7 +7,6 @@ use sqlx::{PgPool, Row};
 
 use crate::error::EmeiError;
 
-/// Represents an indexed contract event.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IndexedEvent {
     pub event_type: String,
@@ -25,7 +21,6 @@ pub struct IndexedEvent {
     pub params: String,
 }
 
-/// Query parameters for the /statement endpoint.
 #[derive(Debug)]
 pub struct StatementQuery {
     pub payer: String,
@@ -36,7 +31,6 @@ pub struct StatementQuery {
     pub limit: u64,
 }
 
-/// PostgreSQL-backed event store.
 pub struct StatementStore {
     pool: PgPool,
 }
@@ -59,13 +53,11 @@ impl StatementStore {
         Ok(Self { pool })
     }
 
-    /// Insert an event. Uses ON CONFLICT to handle duplicates:
-    /// - If tx_hash starts with "invoice-" (synthetic), insert normally
-    /// - If a real tx_hash arrives for the same (event_type, invoice_id), update the existing row
+    /// Insert an event with idempotency in mind
     pub async fn insert_event(&self, event: &IndexedEvent) -> Result<(), EmeiError> {
         sqlx::query(
-            r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
                ON CONFLICT (tx_hash, log_index) DO NOTHING"#,
         )
         .bind(&event.event_type)
@@ -85,7 +77,40 @@ impl StatementStore {
         Ok(())
     }
 
-    /// Query events matching statement parameters.
+    /// Upsert an event as confirmed, allowing updates to certain fields while preserving others.
+    pub async fn upsert_confirmed_event(&self, event: &IndexedEvent) -> Result<(), EmeiError> {
+        sqlx::query(
+            r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'confirmed')
+               ON CONFLICT (tx_hash, log_index) DO UPDATE SET
+                 event_type = EXCLUDED.event_type,
+                 block_number = EXCLUDED.block_number,
+                 timestamp = EXCLUDED.timestamp,
+                 invoice_id = COALESCE(EXCLUDED.invoice_id, events.invoice_id),
+                 payer = COALESCE(EXCLUDED.payer, events.payer),
+                 issuer = COALESCE(EXCLUDED.issuer, events.issuer),
+                 amount = COALESCE(EXCLUDED.amount, events.amount),
+                 params = EXCLUDED.params,
+                 status = 'confirmed'"#,
+        )
+        .bind(&event.event_type)
+        .bind(event.block_number as i64)
+        .bind(&event.tx_hash)
+        .bind(event.log_index as i32)
+        .bind(event.timestamp as i64)
+        .bind(event.invoice_id.map(|id| id as i64))
+        .bind(&event.payer)
+        .bind(&event.issuer)
+        .bind(&event.amount)
+        .bind(&event.params)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("upsert_confirmed_event failed: {e}")))?;
+
+        Ok(())
+    }
+
+    /// Query events for a given payer with pagination.
     pub async fn query_statement(
         &self,
         query: &StatementQuery,
@@ -106,8 +131,7 @@ impl StatementStore {
         Ok(rows.iter().map(row_to_event).collect())
     }
 
-    // ─── Indexer state ────────────────────────────────────────────────────────
-
+    /// Get the last indexed block number from the database, or None if not set.
     pub async fn get_last_block(&self) -> Result<Option<u64>, EmeiError> {
         let row = sqlx::query("SELECT value FROM indexer_state WHERE key = 'last_block_number'")
             .fetch_optional(&self.pool)

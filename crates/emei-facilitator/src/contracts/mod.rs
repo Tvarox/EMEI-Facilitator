@@ -1,7 +1,4 @@
-//! Contract bindings generated via alloy `sol!` macro.
-//!
-//! Each sub-module contains type-safe bindings for one
-//! deployed EMEI smart contract.
+// Contracts module for EMEI Facilitator
 
 pub mod bay8004;
 pub mod erc8004;

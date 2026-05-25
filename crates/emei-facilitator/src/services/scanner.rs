@@ -1,9 +1,6 @@
-//! Overdue scanner service.
-//!
-//! Periodically scans for PRESENTED invoices that have passed their
-//! due date, marks them as OVERDUE on-chain, and penalizes the payer's
-//! reputation via Bay8004.giveFeedback.
-
+/// This module implements the overdue invoice scanner service that periodically checks for
+/// invoices that have been presented but not paid within their due time, and marks them as
+/// overdue on-chain. It also applies reputation penalties to payers for overdue invoices.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,8 +13,7 @@ use crate::contracts::invoice::IEMEIInvoice;
 use crate::error::EmeiError;
 use crate::state::AppState;
 
-/// Background service that scans for overdue invoices and marks them
-/// on-chain via the hot wallet (default interval: 60s).
+/// Background task that runs a loop to scan for overdue invoices and mark them on-chain.
 pub async fn overdue_scanner(state: Arc<AppState>, cancel: CancellationToken) {
     // Stagger startup: wait 20s
     tokio::time::sleep(Duration::from_secs(20)).await;
@@ -110,7 +106,7 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
 
         match state
             .chain
-            .send_hot(state.config.invoice_address, calldata.into())
+            .send_hot(state.config.invoice_address, calldata.into(), &state.redis)
             .await
         {
             Ok(tx_hash) => {
@@ -151,7 +147,11 @@ async fn scan_cycle(state: &AppState) -> Result<(), EmeiError> {
 
                 match state
                     .chain
-                    .send_hot(state.config.bay8004_address, feedback_calldata.into())
+                    .send_hot(
+                        state.config.bay8004_address,
+                        feedback_calldata.into(),
+                        &state.redis,
+                    )
                     .await
                 {
                     Ok(fb_tx) => {

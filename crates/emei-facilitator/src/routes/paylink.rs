@@ -1,21 +1,16 @@
-//! Pay-link route handlers for the x402 present-and-pay fallback.
-//!
-//! These endpoints power the pay.emei.xyz/[id] flow where payers without
-//! a mandate can review and pay an invoice with a single wallet interaction.
-
+/// Route handler for GET /emei/paylink/:id — fetching invoice details and pre-encoded transaction data for the pay-link page.
 use std::sync::Arc;
 
 use alloy_primitives::U256;
 use alloy_sol_types::SolCall;
 use axum::{
-    Json,
     extract::{Path, State},
+    Json,
 };
 use serde::Serialize;
 
 use crate::{contracts::invoice::IEMEIInvoice, error::EmeiError, state::AppState};
 
-/// Response for GET /emei/paylink/:id — invoice details for the pay-link page.
 #[derive(Serialize)]
 pub struct PayLinkInfo {
     pub invoice_id: u64,
@@ -36,14 +31,9 @@ pub struct PayLinkInfo {
     pub pay_to: String,
 }
 
-/// GET /emei/paylink/:id — Get invoice details and pre-encoded transaction data
-/// for the pay-link page.
-///
-/// The frontend uses this to:
-/// 1. Display invoice details (amount, issuer, status)
-/// 2. Ask the payer's wallet to sign two transactions:
-///    a. ERC-20 approve (asset token → Settlement contract)
-///    b. EMEIInvoice.pay(invoiceId)
+/// GET /emei/paylink/:id — Fetch invoice details and pre-encoded transaction data for the pay-link page.
+/// This endpoint is used by the pay-link frontend to retrieve all necessary information to display the invoice and facilitate payment, including pre-encoded calldata for both the ERC-20 approve and the invoice pay transactions.
+/// The endpoint checks that the invoice is in a payable state (PRESENTED or OVERDUE) before returning the data. If the invoice is not payable, it returns a 409 Conflict error.
 pub async fn get_paylink(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u64>,
@@ -62,7 +52,7 @@ pub async fn get_paylink(
     let invoice = IEMEIInvoice::getInvoiceCall::abi_decode_returns(&result)
         .map_err(|e| EmeiError::Internal(format!("failed to decode invoice: {e}")))?;
 
-    // Check invoice is in PRESENTED or OVERDUE status (payable)
+    // Check if invoice is in a payable state (PRESENTED or OVERDUE)
     let status_str = match invoice.status {
         0 => "ISSUED",
         1 => "PRESENTED",
@@ -79,8 +69,7 @@ pub async fn get_paylink(
         )));
     }
 
-    // Generate approve calldata: ERC20.approve(settlement, amount)
-    // Standard ERC-20 approve function selector: 0x095ea7b3
+    // Generate approve calldata: ERC-20 approve(settlement_address, amount)
     let approve_calldata = {
         let mut data = vec![0x09, 0x5e, 0xa7, 0xb3]; // approve(address,uint256)
         data.extend_from_slice(&[0u8; 12]); // pad address to 32 bytes

@@ -1,19 +1,19 @@
 //! PostgreSQL schema DDL for the EMEI database.
 
-/// SQL to create all tables and indexes. Safe to run multiple times (IF NOT EXISTS).
 pub const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS events (
     id BIGSERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
-    block_number BIGINT NOT NULL,
+    block_number BIGINT NOT NULL DEFAULT 0,
     tx_hash TEXT NOT NULL,
-    log_index INTEGER NOT NULL,
+    log_index INTEGER NOT NULL DEFAULT 0,
     timestamp BIGINT NOT NULL,
     invoice_id BIGINT,
     payer TEXT,
     issuer TEXT,
     amount TEXT,
     params TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'confirmed',
     UNIQUE(tx_hash, log_index)
 );
 
@@ -22,6 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_events_issuer ON events(issuer);
 CREATE INDEX IF NOT EXISTS idx_events_invoice_id ON events(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_events_block_number ON events(block_number DESC);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
 
 CREATE TABLE IF NOT EXISTS indexer_state (
     key TEXT PRIMARY KEY,

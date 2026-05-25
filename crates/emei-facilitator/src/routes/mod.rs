@@ -1,7 +1,4 @@
-//! HTTP route handlers for the EMEI facilitator REST API.
-//!
-//! Assembles all route modules into a single Axum router.
-
+/// Main route definitions for the EMEI Facilitator API.
 use std::sync::Arc;
 
 use axum::{
@@ -19,10 +16,9 @@ pub mod paylink;
 pub mod public;
 pub mod query;
 pub mod receipt;
+pub mod webhook;
 pub mod withdraw;
 
-/// Build the complete EMEI route tree.
-///
 /// All routes are prefixed with `/emei/` and grouped by domain.
 pub fn emei_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -51,4 +47,6 @@ pub fn emei_routes() -> Router<Arc<AppState>> {
         .nest("/emei/public", public::router())
         // Health check
         .route("/health", get(health::health_check))
+        // Webhook (Alchemy event notifications)
+        .route("/emei/webhook", post(webhook::handle_webhook))
 }

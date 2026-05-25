@@ -1,8 +1,4 @@
-//! Invoice route handlers: POST /invoice, /present, /pay, /collect
-//!
-//! Each handler inserts a real-time event into the DB with the actual
-//! transaction hash and full context after a successful submission.
-
+// Route handlers for invoice-related endpoints in the EMEI Facilitator API.
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
@@ -14,7 +10,7 @@ use crate::{
     state::AppState, types::*,
 };
 
-/// POST /emei/invoice — Create a new invoice on-chain.
+/// POST /emei/create — Create a new invoice on the blockchain.
 pub async fn create_invoice(
     State(state): State<Arc<AppState>>,
     signer: UserSigner,
@@ -22,8 +18,9 @@ pub async fn create_invoice(
 ) -> Result<(StatusCode, Json<TxResponse>), EmeiError> {
     body.validate()?;
 
+    // Get issuer address from signer
     let issuer_address = signer.0.address();
-
+    // Parse and validate input fields
     let payer: Address = body.payer.parse().map_err(|_| EmeiError::Validation {
         field: "payer".into(),
         reason: "invalid address".into(),
@@ -141,7 +138,7 @@ pub async fn create_invoice(
     ))
 }
 
-/// POST /emei/present — Present an invoice to the payer.
+/// POST /emei/present — Present an invoice to trigger state changes and events.
 pub async fn present_invoice(
     State(state): State<Arc<AppState>>,
     signer: UserSigner,
@@ -161,7 +158,7 @@ pub async fn present_invoice(
 
     let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
 
-    // Insert real-time event with full context
+    // Insert real-time event
     let _ = state
         .db
         .insert_event(&IndexedEvent {
@@ -183,7 +180,7 @@ pub async fn present_invoice(
     }))
 }
 
-/// POST /emei/pay — Pay an invoice.
+/// POST /emei/pay — Pay an invoice directly (payer-initiated).
 pub async fn pay_invoice(
     State(state): State<Arc<AppState>>,
     signer: UserSigner,
@@ -225,7 +222,7 @@ pub async fn pay_invoice(
     }))
 }
 
-/// POST /emei/collect — Collect an invoice via mandate (uses hot wallet).
+/// POST /emei/collect — Collect payment for an invoice (issuer-initiated).
 pub async fn collect_invoice(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CollectRequest>,
@@ -238,7 +235,7 @@ pub async fn collect_invoice(
 
     let tx_hash = state
         .chain
-        .send_hot(state.config.invoice_address, calldata.into())
+        .send_hot(state.config.invoice_address, calldata.into(), &state.redis)
         .await?;
 
     let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
@@ -266,8 +263,7 @@ pub async fn collect_invoice(
     }))
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
+// Helper function to get current timestamp as u64
 fn now_ts() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

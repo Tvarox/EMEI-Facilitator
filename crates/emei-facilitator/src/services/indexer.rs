@@ -1,9 +1,4 @@
-//! Event indexer service.
-//!
-//! Continuously polls the chain for invoice state and persists events
-//! to the SQLite database. Re-scans recent invoices to catch state
-//! transitions (ISSUED → PRESENTED → PAID).
-
+/// This module implements the invoice event indexer service that runs on startup, checks if the database is empty, and if so, performs a one-time backfill of all existing invoices from the blockchain. It then sleeps indefinitely, as ongoing indexing is handled by the webhook worker that listens for Alchemy webhook events about invoice creations, presentations, payments, and overdue status updates.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,243 +11,165 @@ use crate::db::IndexedEvent;
 use crate::error::EmeiError;
 use crate::state::AppState;
 
-/// Background service that indexes on-chain events into the local SQLite
-/// database. Polls every 15 seconds. Re-scans recent invoices to catch
-/// state transitions.
+/// Background task that runs on startup to backfill invoice events if DB is empty, then sleeps indefinitely.
 pub async fn event_indexer(state: Arc<AppState>, cancel: CancellationToken) {
-    // Stagger startup
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
-    let poll_interval = Duration::from_secs(15);
+    let has_data = state.db.latest_block().await.unwrap_or(None).unwrap_or(0) > 0;
 
+    if !has_data {
+        tracing::info!("indexer: DB empty, running one-time backfill");
+        if let Err(e) = backfill(&state).await {
+            tracing::warn!(error = %e, "indexer: backfill failed (webhook will handle going forward)");
+        }
+    } else {
+        tracing::info!("indexer: DB has data, skipping backfill (webhook handles updates)");
+    }
+
+    // Sleep forever — webhook handles all ongoing indexing
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                tracing::info!(service = "event_indexer", "shutting down");
+                tracing::info!("indexer: shutting down");
                 break;
             }
-            _ = tokio::time::sleep(poll_interval) => {
-                if let Err(e) = index_cycle(&state).await {
-                    tracing::warn!(
-                        service = "event_indexer",
-                        error = %e,
-                        "indexing cycle failed"
-                    );
-                }
-            }
+            _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
         }
     }
 }
 
-async fn index_cycle(state: &AppState) -> Result<(), EmeiError> {
-    // Get total invoice count
+/// One-time backfill of all existing invoices from the blockchain into the database. Runs on startup if DB is empty.
+async fn backfill(state: &AppState) -> Result<(), EmeiError> {
     let count_calldata = IEMEIInvoice::getInvoiceCountCall {}.abi_encode();
     let count_result = state
         .chain
         .call(state.config.invoice_address, count_calldata.into())
         .await?;
 
-    let total_invoices: u64 = IEMEIInvoice::getInvoiceCountCall::abi_decode_returns(&count_result)
+    let total: u64 = IEMEIInvoice::getInvoiceCountCall::abi_decode_returns(&count_result)
         .map_err(|e| EmeiError::Internal(format!("decode getInvoiceCount: {e}")))?
         .try_into()
         .unwrap_or(0);
 
-    if total_invoices == 0 {
+    if total == 0 {
         return Ok(());
     }
 
-    // Get the last fully indexed invoice ID
-    let last_indexed = state.db.get_last_block().await?.unwrap_or(0);
+    tracing::info!(total, "indexer: backfilling invoices");
 
-    // Strategy:
-    // 1. Index any NEW invoices (last_indexed+1 to total)
-    // 2. Re-scan the last 20 invoices to catch state transitions (PRESENTED → PAID)
-
-    // Part 1: Index new invoices
-    if last_indexed < total_invoices {
-        let start = last_indexed + 1;
-        tracing::info!(
-            service = "event_indexer",
-            from = start,
-            to = total_invoices,
-            "indexing new invoices"
-        );
-
-        for id in start..=total_invoices {
-            if let Err(e) = index_invoice(state, id).await {
-                tracing::warn!(
-                    service = "event_indexer",
-                    invoice_id = id,
-                    error = %e,
-                    "failed to index invoice"
-                );
-                break;
+    for id in 1..=total {
+        let calldata = IEMEIInvoice::getInvoiceCall {
+            invoiceId: U256::from(id),
+        }
+        .abi_encode();
+        let result = match state
+            .chain
+            .call(state.config.invoice_address, calldata.into())
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
             }
-            state.db.set_last_block(id).await?;
-            tokio::time::sleep(Duration::from_millis(800)).await;
-        }
-    }
+        };
 
-    // Part 2: Re-scan last 20 invoices to catch state changes
-    let rescan_start = total_invoices.saturating_sub(20) + 1;
-    for id in rescan_start..=total_invoices {
-        if let Err(_) = rescan_invoice(state, id).await {
-            // Non-critical: just skip
+        let invoice = match IEMEIInvoice::getInvoiceCall::abi_decode_returns(&result) {
+            Ok(inv) => inv,
+            Err(_) => continue,
+        };
+
+        let issuer = format!("0x{}", hex::encode(invoice.issuer));
+        let payer = format!("0x{}", hex::encode(invoice.payer));
+        let amount = invoice.amount.to_string();
+        let created_ts: u64 = invoice.createdAt.try_into().unwrap_or(0);
+
+        // Insert Created
+        let _ = state
+            .db
+            .upsert_confirmed_event(&IndexedEvent {
+                event_type: "InvoiceCreated".to_string(),
+                block_number: id,
+                tx_hash: format!("backfill-{}-created", id),
+                log_index: 0,
+                timestamp: created_ts,
+                invoice_id: Some(id),
+                payer: Some(payer.clone()),
+                issuer: Some(issuer.clone()),
+                amount: Some(amount.clone()),
+                params: "{}".to_string(),
+            })
+            .await;
+
+        // Insert Presented if status >= 1
+        if invoice.status >= 1 {
+            let pts: u64 = invoice.presentedAt.try_into().unwrap_or(created_ts + 1);
+            let _ = state
+                .db
+                .upsert_confirmed_event(&IndexedEvent {
+                    event_type: "InvoicePresented".to_string(),
+                    block_number: id,
+                    tx_hash: format!("backfill-{}-presented", id),
+                    log_index: 1,
+                    timestamp: pts,
+                    invoice_id: Some(id),
+                    payer: Some(payer.clone()),
+                    issuer: Some(issuer.clone()),
+                    amount: Some(amount.clone()),
+                    params: "{}".to_string(),
+                })
+                .await;
         }
+
+        // Insert Paid if status == 2
+        if invoice.status == 2 {
+            let _ = state
+                .db
+                .upsert_confirmed_event(&IndexedEvent {
+                    event_type: "InvoicePaid".to_string(),
+                    block_number: id,
+                    tx_hash: format!("backfill-{}-paid", id),
+                    log_index: 2,
+                    timestamp: now_ts(),
+                    invoice_id: Some(id),
+                    payer: Some(payer.clone()),
+                    issuer: Some(issuer.clone()),
+                    amount: Some(amount.clone()),
+                    params: "{}".to_string(),
+                })
+                .await;
+        }
+
+        // Insert Overdue if status == 3
+        if invoice.status == 3 {
+            let _ = state
+                .db
+                .upsert_confirmed_event(&IndexedEvent {
+                    event_type: "InvoiceOverdue".to_string(),
+                    block_number: id,
+                    tx_hash: format!("backfill-{}-overdue", id),
+                    log_index: 3,
+                    timestamp: now_ts(),
+                    invoice_id: Some(id),
+                    payer: Some(payer.clone()),
+                    issuer: Some(issuer.clone()),
+                    amount: Some(amount.clone()),
+                    params: "{}".to_string(),
+                })
+                .await;
+        }
+
+        // Rate limit
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
+    tracing::info!(total, "indexer: backfill complete");
     Ok(())
 }
 
-/// Index a single invoice — inserts events for all observed states.
-async fn index_invoice(state: &AppState, id: u64) -> Result<(), EmeiError> {
-    let invoice = fetch_invoice(state, id).await?;
-    insert_events_for_invoice(state, id, &invoice).await
-}
-
-/// Re-scan an already-indexed invoice to catch state transitions.
-/// Only inserts events that don't already exist (INSERT OR IGNORE).
-async fn rescan_invoice(state: &AppState, id: u64) -> Result<(), EmeiError> {
-    let invoice = fetch_invoice(state, id).await?;
-    insert_events_for_invoice(state, id, &invoice).await
-}
-
-/// Fetch invoice from chain.
-async fn fetch_invoice(state: &AppState, id: u64) -> Result<IEMEIInvoice::Invoice, EmeiError> {
-    let calldata = IEMEIInvoice::getInvoiceCall {
-        invoiceId: U256::from(id),
-    }
-    .abi_encode();
-
-    let result = state
-        .chain
-        .call(state.config.invoice_address, calldata.into())
-        .await?;
-
-    IEMEIInvoice::getInvoiceCall::abi_decode_returns(&result)
-        .map_err(|e| EmeiError::Internal(format!("decode getInvoice({id}): {e}")))
-}
-
-/// Insert events into DB based on invoice state. Uses INSERT OR IGNORE
-/// so duplicate events are harmless.
-async fn insert_events_for_invoice(
-    state: &AppState,
-    id: u64,
-    invoice: &IEMEIInvoice::Invoice,
-) -> Result<(), EmeiError> {
-    let issuer = format!("0x{}", hex::encode(invoice.issuer));
-    let payer = format!("0x{}", hex::encode(invoice.payer));
-    let amount = invoice.amount.to_string();
-    let now_ts = std::time::SystemTime::now()
+fn now_ts() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-
-    let created_ts: u64 = if invoice.createdAt > U256::ZERO {
-        invoice.createdAt.try_into().unwrap_or(now_ts)
-    } else {
-        now_ts
-    };
-
-    let category = invoice
-        .lineItems
-        .first()
-        .map(|li| li.category.clone())
-        .unwrap_or_default();
-
-    let collection_mode = match invoice.collectionMode {
-        0 => "mandate",
-        1 => "pay_link",
-        _ => "unknown",
-    };
-
-    let params = serde_json::json!({
-        "category": category,
-        "collection_mode": collection_mode,
-        "asset": format!("0x{}", hex::encode(invoice.asset)),
-    })
-    .to_string();
-
-    // Always insert InvoiceCreated
-    state
-        .db
-        .insert_event(&IndexedEvent {
-            event_type: "InvoiceCreated".to_string(),
-            block_number: id,
-            tx_hash: format!("invoice-{}-created", id),
-            log_index: 0,
-            timestamp: created_ts,
-            invoice_id: Some(id),
-            payer: Some(payer.clone()),
-            issuer: Some(issuer.clone()),
-            amount: Some(amount.clone()),
-            params: params.clone(),
-        })
-        .await?;
-
-    // If presented (status >= 1)
-    if invoice.status >= 1 {
-        let presented_ts: u64 = if invoice.presentedAt > U256::ZERO {
-            invoice.presentedAt.try_into().unwrap_or(created_ts + 1)
-        } else {
-            created_ts + 1
-        };
-
-        state
-            .db
-            .insert_event(&IndexedEvent {
-                event_type: "InvoicePresented".to_string(),
-                block_number: id,
-                tx_hash: format!("invoice-{}-presented", id),
-                log_index: 1,
-                timestamp: presented_ts,
-                invoice_id: Some(id),
-                payer: Some(payer.clone()),
-                issuer: Some(issuer.clone()),
-                amount: Some(amount.clone()),
-                params: params.clone(),
-            })
-            .await?;
-    }
-
-    // If paid (status == 2)
-    if invoice.status == 2 {
-        state
-            .db
-            .insert_event(&IndexedEvent {
-                event_type: "InvoicePaid".to_string(),
-                block_number: id,
-                tx_hash: format!("invoice-{}-paid", id),
-                log_index: 2,
-                timestamp: now_ts,
-                invoice_id: Some(id),
-                payer: Some(payer.clone()),
-                issuer: Some(issuer.clone()),
-                amount: Some(amount.clone()),
-                params: params.clone(),
-            })
-            .await?;
-    }
-
-    // If overdue (status == 3)
-    if invoice.status == 3 {
-        state
-            .db
-            .insert_event(&IndexedEvent {
-                event_type: "InvoiceOverdue".to_string(),
-                block_number: id,
-                tx_hash: format!("invoice-{}-overdue", id),
-                log_index: 3,
-                timestamp: now_ts,
-                invoice_id: Some(id),
-                payer: Some(payer.clone()),
-                issuer: Some(issuer.clone()),
-                amount: Some(amount.clone()),
-                params: params.clone(),
-            })
-            .await?;
-    }
-
-    Ok(())
+        .as_secs()
 }

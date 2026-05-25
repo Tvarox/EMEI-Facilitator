@@ -1,12 +1,11 @@
-//! Query route handlers: GET /invoice/:id, /statement, /reputation/:address, /balance/:address
-
+/// Handlers for query endpoints that fetch data from the chain or database.
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 use axum::{
-    Json,
     extract::{Path, Query, State},
+    Json,
 };
 
 use crate::{
@@ -17,7 +16,7 @@ use crate::{
     types::*,
 };
 
-/// GET /emei/invoice/:id — Fetch invoice details from the chain.
+/// GET /emei/invoice/:id — Fetch invoice details by ID.
 pub async fn get_invoice(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u64>,
@@ -64,7 +63,7 @@ pub async fn get_invoice(
     }))
 }
 
-/// GET /emei/statement — Query indexed events from the database.
+/// GET /emei/statement — Query payment history and activity for a given address with filters.
 pub async fn get_statement(
     State(state): State<Arc<AppState>>,
     Query(params): Query<StatementQueryParams>,
@@ -82,7 +81,7 @@ pub async fn get_statement(
     Ok(Json(events))
 }
 
-/// GET /emei/reputation/:address — Get reputation score from Bay8004.
+/// GET /emei/reputation/:address — Fetch the reputation score for a given address.
 pub async fn get_reputation(
     State(state): State<Arc<AppState>>,
     Path(address): Path<String>,
@@ -108,7 +107,7 @@ pub async fn get_reputation(
     }))
 }
 
-/// GET /emei/balance/:address — Get vault balance and accrued yield.
+/// GET /emei/balance/:address — Fetch vault balance and accrued yield for a given address.
 pub async fn get_balance(
     State(state): State<Arc<AppState>>,
     Path(address): Path<String>,

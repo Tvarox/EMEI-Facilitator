@@ -1,8 +1,4 @@
-//! EMEI Facilitator standalone server binary.
-//!
-//! Loads configuration from environment variables, initializes the chain client,
-//! SQLite store, and application state, then starts background services and
-//! the Axum HTTP server on 0.0.0.0:8080.
+// Server entry point for EMEI Facilitator
 
 use std::sync::Arc;
 
@@ -17,10 +13,8 @@ use emei_facilitator::{emei_router, start_services};
 
 #[tokio::main]
 async fn main() {
-    // Load .env file (from current working directory)
     dotenvy::dotenv().ok();
-
-    // Initialize tracing
+    // Initialize tracing subscriber
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -55,12 +49,22 @@ async fn main() {
             std::process::exit(1);
         });
 
+    // Connect to Redis
+    let redis = emei_facilitator::redis_client::RedisClient::new(&config.redis_url)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to connect to Redis: {e}");
+            std::process::exit(1);
+        });
+
+    tracing::info!("Redis connected");
+
     // Build application state
     let state = Arc::new(AppState {
         chain: Arc::new(chain),
         db,
+        redis,
         receipt_queue: ReceiptQueue::new(),
-        nonce_manager: emei_facilitator::nonce::NonceManager::new(),
         config,
         cancel: CancellationToken::new(),
         started_at: std::time::Instant::now(),

@@ -1,21 +1,16 @@
-//! Receipt route handler: GET /verify/:id
-
+/// Handlers for receipt-related endpoints, including verification of receipt inclusion in batches.
 use std::sync::Arc;
 
 use alloy_primitives::U256;
 use alloy_sol_types::SolCall;
 use axum::{
-    Json,
     extract::{Path, State},
+    Json,
 };
 
 use crate::{contracts::receipt::IEMEIReceipt, error::EmeiError, state::AppState, types::*};
 
-/// GET /emei/verify/:id — Verify a receipt's inclusion in a batch.
-///
-/// This endpoint checks the latest batch number and verifies that
-/// the receipt (identified by invoice ID) has been included in a
-/// posted Merkle root.
+/// GET /emei/receipt/verify/:id — Verify if a receipt for a given invoice ID is included in a batch on-chain.
 pub async fn verify_receipt(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u64>,

@@ -1,13 +1,13 @@
-//! Mandate route handlers: POST /mandate, DELETE /mandate/:id
+// Route handlers for mandate-related endpoints in the EMEI Facilitator API.
 
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
+    Json,
 };
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     types::*,
 };
 
-/// POST /emei/mandate — Create a new spending mandate.
+/// POST /emei/mandate — Create a new mandate on the blockchain.
 pub async fn create_mandate(
     State(state): State<Arc<AppState>>,
     signer: UserSigner,
@@ -66,7 +66,7 @@ pub async fn create_mandate(
     ))
 }
 
-/// DELETE /emei/mandate/:id — Revoke a mandate.
+/// POST /emei/mandate/{id}/revoke — Revoke an existing mandate by ID.
 pub async fn revoke_mandate(
     State(state): State<Arc<AppState>>,
     signer: UserSigner,
