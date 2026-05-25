@@ -151,11 +151,11 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
                                     amount,
                                 };
                                 let _ = state
-                                    .chain
-                                    .send_hot(
+                                    .enqueue_tx(
                                         state.config.bay8004_address,
-                                        alloy_sol_types::SolCall::abi_encode(&fb).into(),
-                                        &state.redis,
+                                        alloy_sol_types::SolCall::abi_encode(&fb),
+                                        5,
+                                        "webhook:feedback",
                                     )
                                     .await;
                             }
@@ -497,11 +497,11 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                                 amount,
                             };
                             let _ = state
-                                .chain
-                                .send_hot(
+                                .enqueue_tx(
                                     state.config.bay8004_address,
-                                    alloy_sol_types::SolCall::abi_encode(&fb).into(),
-                                    &state.redis,
+                                    alloy_sol_types::SolCall::abi_encode(&fb),
+                                    5,
+                                    "webhook:feedback",
                                 )
                                 .await;
                         }

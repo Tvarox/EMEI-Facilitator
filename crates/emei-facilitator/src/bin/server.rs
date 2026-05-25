@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use alloy_provider::ProviderBuilder;
+use alloy_transport_http::reqwest;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -60,8 +62,15 @@ async fn main() {
     tracing::info!("Redis connected");
 
     // Build application state
+    let rpc_url: reqwest::Url = config.rpc_url.parse().unwrap_or_else(|e| {
+        eprintln!("Invalid RPC URL: {e}");
+        std::process::exit(1);
+    });
+    let rpc_provider = ProviderBuilder::default().connect_http(rpc_url);
+
     let state = Arc::new(AppState {
         chain: Arc::new(chain),
+        rpc_provider,
         db,
         redis,
         receipt_queue: ReceiptQueue::new(),

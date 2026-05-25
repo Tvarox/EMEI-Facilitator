@@ -56,6 +56,9 @@ pub struct EmeiConfig {
     /// Private key for the hot wallet used by background services.
     pub hot_wallet_key: B256,
 
+    /// Additional hot wallet keys for the wallet pool (optional).
+    pub hot_wallet_keys: Vec<B256>,
+
     /// PostgreSQL connection URL.
     pub database_url: String,
 
@@ -95,6 +98,23 @@ impl EmeiConfig {
         let rpc_url = env_required("EMEI_RPC_URL")?;
         let hot_wallet_key = parse_hex_key(&env_required("EMEI_HOT_WALLET_KEY")?)?;
 
+        // Parse additional wallet keys (comma-separated, optional)
+        let hot_wallet_keys = {
+            let primary = hot_wallet_key;
+            let mut keys = vec![primary];
+            if let Ok(extra) = std::env::var("EMEI_HOT_WALLET_KEYS") {
+                for key_str in extra.split(',') {
+                    let trimmed = key_str.trim();
+                    if !trimmed.is_empty() {
+                        if let Ok(k) = parse_hex_key(trimmed) {
+                            keys.push(k);
+                        }
+                    }
+                }
+            }
+            keys
+        };
+
         let invoice_address = parse_address(&env_required("EMEI_INVOICE_ADDRESS")?)?;
         let mandate_address = parse_address(&env_required("EMEI_MANDATE_ADDRESS")?)?;
         let settlement_address = parse_address(&env_required("EMEI_SETTLEMENT_ADDRESS")?)?;
@@ -118,6 +138,7 @@ impl EmeiConfig {
             bay8004_address,
             erc8004_address,
             hot_wallet_key,
+            hot_wallet_keys,
             database_url,
             redis_url,
             webhook_signing_key,

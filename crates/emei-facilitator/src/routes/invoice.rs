@@ -233,12 +233,11 @@ pub async fn collect_invoice(
     }
     .abi_encode();
 
-    let tx_hash = state
-        .chain
-        .send_hot(state.config.invoice_address, calldata.into(), &state.redis)
+    let job_id = state
+        .enqueue_tx(state.config.invoice_address, calldata, 8, "collect")
         .await?;
 
-    let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
+    let tx_hash_str = format!("pending:job_{}", job_id);
 
     // Insert real-time event
     let _ = state
