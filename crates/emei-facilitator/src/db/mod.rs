@@ -59,7 +59,7 @@ impl StatementStore {
     pub async fn insert_event(&self, event: &IndexedEvent) -> Result<(), EmeiError> {
         sqlx::query(
             r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                ON CONFLICT (tx_hash, log_index) DO NOTHING"#,
         )
         .bind(&event.event_type)
@@ -72,6 +72,7 @@ impl StatementStore {
         .bind(&event.issuer)
         .bind(&event.amount)
         .bind(&event.params)
+        .bind(&event.status)
         .execute(&self.pool)
         .await
         .map_err(|e| EmeiError::Database(format!("insert_event failed: {e}")))?;
@@ -435,6 +436,32 @@ impl StatementStore {
         .await
         .map_err(|e| EmeiError::Database(format!("has_event_for_invoice failed: {e}")))?;
         Ok(row.get::<i64, _>("cnt") > 0)
+    }
+
+    /// When a tx_queue job is confirmed, update any events that have a placeholder tx_hash
+    /// (e.g. "pending:job_123" or "pending-collect-job-123") with the real tx_hash and mark confirmed.
+    pub async fn confirm_events_for_job(
+        &self,
+        job_id: i64,
+        real_tx_hash: &str,
+        block_number: u64,
+    ) -> Result<u64, EmeiError> {
+        // Match patterns: "pending:job_{id}" and "pending-collect-job-{id}"
+        let pattern1 = format!("pending:job_{}", job_id);
+        let pattern2 = format!("pending-collect-job-{}", job_id);
+
+        let result = sqlx::query(
+            "UPDATE events SET tx_hash = $1, block_number = $2, status = 'confirmed' WHERE tx_hash = $3 OR tx_hash = $4",
+        )
+        .bind(real_tx_hash)
+        .bind(block_number as i64)
+        .bind(&pattern1)
+        .bind(&pattern2)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmeiError::Database(format!("confirm_events_for_job failed: {e}")))?;
+
+        Ok(result.rows_affected())
     }
 
     /// Promote a pending (optimistic) event to confirmed by updating it in-place with

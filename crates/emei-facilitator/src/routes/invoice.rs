@@ -127,7 +127,7 @@ pub async fn create_invoice(
                 "asset": format!("0x{}", hex::encode(asset)),
             })
             .to_string(),
-            status: "pending".to_string(),
+            status: "confirmed".to_string(),
         })
         .await;
 
@@ -173,7 +173,7 @@ pub async fn present_invoice(
             issuer: Some(format!("0x{}", hex::encode(issuer_address))),
             amount: None,
             params: "{}".to_string(),
-            status: "pending".to_string(),
+            status: "confirmed".to_string(),
         })
         .await;
 
@@ -216,7 +216,7 @@ pub async fn pay_invoice(
             issuer: None,
             amount: None,
             params: "{}".to_string(),
-            status: "pending".to_string(),
+            status: "confirmed".to_string(),
         })
         .await;
 
