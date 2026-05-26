@@ -107,13 +107,6 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
     for activity in activities {
         if let Some(log) = activity.log {
             if let Some(event) = parse_log(&activity.hash, &log) {
-                tracing::info!(
-                    event_type = %event.event_type,
-                    tx = %event.tx_hash,
-                    invoice_id = ?event.invoice_id,
-                    "webhook_worker: parsed event"
-                );
-
                 // When InvoicePaid confirmed: queue receipt + positive reputation
                 // Only trigger side-effects if this is a NEW confirmation (not a duplicate)
                 let already_confirmed = state
@@ -122,20 +115,16 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
                     .await
                     .unwrap_or(false);
 
-                if !already_confirmed && event.event_type == "InvoicePaid" {
+                // For ANY event type with an invoice_id, try to promote a pending
+                // (optimistic) row to confirmed in-place, avoiding duplicates.
+                let mut promoted = false;
+                if !already_confirmed {
                     if let Some(inv_id) = event.invoice_id {
-                        tracing::info!(
-                            invoice_id = inv_id,
-                            tx = %event.tx_hash,
-                            "webhook_worker: InvoicePaid confirmed, queuing receipt + feedback"
-                        );
-
-                        // Promote the optimistic pending event to confirmed (update in-place)
-                        let promoted = state
+                        promoted = state
                             .db
                             .confirm_pending_event_for_invoice(
                                 inv_id,
-                                "InvoicePaid",
+                                &event.event_type,
                                 &event.tx_hash,
                                 event.block_number,
                                 event.log_index,
@@ -149,9 +138,20 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
                         if promoted {
                             tracing::info!(
                                 invoice_id = inv_id,
+                                event_type = %event.event_type,
                                 "webhook_worker: promoted pending → confirmed"
                             );
                         }
+                    }
+                }
+
+                if !already_confirmed && event.event_type == "InvoicePaid" {
+                    if let Some(inv_id) = event.invoice_id {
+                        tracing::info!(
+                            invoice_id = inv_id,
+                            tx = %event.tx_hash,
+                            "webhook_worker: InvoicePaid confirmed, queuing receipt + feedback"
+                        );
 
                         let receipt_hash =
                             alloy_primitives::keccak256(U256::from(inv_id).to_be_bytes::<32>());
@@ -189,14 +189,7 @@ async fn process_payload(state: &AppState, raw: &str) -> Result<(), String> {
 
                 // If we promoted the pending row, skip the upsert (it's already confirmed)
                 // Otherwise upsert as normal for events without a prior pending row
-                if !(event.event_type == "InvoicePaid"
-                    && event.invoice_id.is_some()
-                    && state
-                        .db
-                        .is_event_confirmed(&event.tx_hash, event.log_index)
-                        .await
-                        .unwrap_or(false))
-                {
+                if !promoted {
                     state
                         .db
                         .upsert_confirmed_event(&event)
@@ -272,7 +265,7 @@ fn parse_log(tx_hash: &Option<String>, log: &AlchemyLog) -> Option<IndexedEvent>
                     None
                 },
                 params: "{}".to_string(),
-            status: "pending".to_string(),
+                status: "pending".to_string(),
             })
         }
         // 3 topics: InvoicePresented/Paid/Overdue (invoiceId, payer indexed)
@@ -301,7 +294,7 @@ fn parse_log(tx_hash: &Option<String>, log: &AlchemyLog) -> Option<IndexedEvent>
                 issuer: None,
                 amount,
                 params: "{}".to_string(),
-            status: "pending".to_string(),
+                status: "pending".to_string(),
             })
         }
         _ => None,
@@ -458,7 +451,7 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                         None
                     },
                     params: "{}".to_string(),
-            status: "pending".to_string(),
+                    status: "pending".to_string(),
                 })
             }
             // 3 topics: InvoicePresented/Paid/Overdue
@@ -490,7 +483,7 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                     issuer: None,
                     amount,
                     params: "{}".to_string(),
-            status: "pending".to_string(),
+                    status: "pending".to_string(),
                 })
             }
             _ => None,
@@ -512,15 +505,16 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                 "webhook_worker: confirmed event"
             );
 
-            // Side effects for InvoicePaid — ONLY on first confirmation
-            if !already_confirmed && event.event_type == "InvoicePaid" {
+            // For ANY event type with an invoice_id, try to promote a pending
+            // (optimistic) row to confirmed in-place, avoiding duplicates.
+            let mut promoted = false;
+            if !already_confirmed {
                 if let Some(inv_id) = event.invoice_id {
-                    // Promote the optimistic pending event to confirmed (update in-place)
-                    let promoted = state
+                    promoted = state
                         .db
                         .confirm_pending_event_for_invoice(
                             inv_id,
-                            "InvoicePaid",
+                            &event.event_type,
                             &event.tx_hash,
                             event.block_number,
                             event.log_index,
@@ -534,10 +528,16 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
                     if promoted {
                         tracing::info!(
                             invoice_id = inv_id,
+                            event_type = %event.event_type,
                             "webhook_worker: promoted pending → confirmed (graphql)"
                         );
                     }
+                }
+            }
 
+            // Side effects for InvoicePaid — ONLY on first confirmation
+            if !already_confirmed && event.event_type == "InvoicePaid" {
+                if let Some(inv_id) = event.invoice_id {
                     let receipt_hash =
                         alloy_primitives::keccak256(U256::from(inv_id).to_be_bytes::<32>());
                     let hash_bytes: [u8; 32] = receipt_hash.into();
@@ -572,14 +572,7 @@ async fn process_graphql_payload(state: &AppState, raw: &str) -> Result<(), Stri
             }
 
             // If we promoted the pending row, skip the upsert (already confirmed)
-            if !(event.event_type == "InvoicePaid"
-                && event.invoice_id.is_some()
-                && state
-                    .db
-                    .is_event_confirmed(&event.tx_hash, event.log_index)
-                    .await
-                    .unwrap_or(false))
-            {
+            if !promoted {
                 state
                     .db
                     .upsert_confirmed_event(&event)
