@@ -82,6 +82,43 @@ impl StatementStore {
 
     /// Upsert an event as confirmed. Returns true if this was a NEW insert, false if it updated an existing row.
     pub async fn upsert_confirmed_event(&self, event: &IndexedEvent) -> Result<bool, EmeiError> {
+        // First, try to update an existing placeholder row (log_index=0) for the same tx_hash + event_type.
+        // This handles the case where create_invoice inserted a row with log_index=0 and no invoice_id,
+        // and the webhook now has the real log_index and invoice_id.
+        let updated = sqlx::query(
+            r#"UPDATE events SET
+                 log_index = $1,
+                 block_number = $2,
+                 timestamp = $3,
+                 invoice_id = COALESCE($4, events.invoice_id),
+                 payer = COALESCE($5, events.payer),
+                 issuer = COALESCE($6, events.issuer),
+                 amount = COALESCE($7, events.amount),
+                 status = 'confirmed'
+               WHERE tx_hash = $8 AND event_type = $9 AND log_index = 0 AND status != 'confirmed'"#,
+        )
+        .bind(event.log_index as i32)
+        .bind(event.block_number as i64)
+        .bind(event.timestamp as i64)
+        .bind(event.invoice_id.map(|id| id as i64))
+        .bind(&event.payer)
+        .bind(&event.issuer)
+        .bind(&event.amount)
+        .bind(&event.tx_hash)
+        .bind(&event.event_type)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            EmeiError::Database(format!(
+                "upsert_confirmed_event (update placeholder) failed: {e}"
+            ))
+        })?;
+
+        if updated.rows_affected() > 0 {
+            return Ok(false); // Updated existing row
+        }
+
+        // Normal upsert path (no placeholder found, or log_index already matches)
         let result = sqlx::query(
             r#"INSERT INTO events (event_type, block_number, tx_hash, log_index, timestamp, invoice_id, payer, issuer, amount, params, status)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'confirmed')
