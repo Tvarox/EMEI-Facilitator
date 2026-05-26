@@ -190,6 +190,21 @@ async fn process_job(
     // Mark as confirmed
     state.db.mark_tx_confirmed(job.id, block_number).await?;
 
+    // Update any events table rows that used a placeholder tx_hash for this job
+    let updated = state
+        .db
+        .confirm_events_for_job(job.id, &tx_hash, block_number)
+        .await
+        .unwrap_or(0);
+    if updated > 0 {
+        tracing::debug!(
+            wallet = %wallet_id,
+            job_id = job.id,
+            updated_events = updated,
+            "tx_sender: confirmed events updated"
+        );
+    }
+
     Ok(crate::db::tx_queue::TxResult {
         job_id: job.id,
         tx_hash,
