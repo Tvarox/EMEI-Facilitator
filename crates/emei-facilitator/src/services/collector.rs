@@ -78,6 +78,31 @@ async fn collect_cycle(state: &AppState) -> Result<(), EmeiError> {
             continue;
         }
 
+        // Skip if invoice is already past due (let the overdue_scanner handle it)
+        let presented_at: u64 = invoice.presentedAt.try_into().unwrap_or(0);
+        if presented_at > 0 {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let due_at = match invoice.terms.termType {
+                0 => presented_at + 300, // due_on_receipt: 5 min grace
+                1 => {
+                    let net_days: u64 = invoice.terms.netDays.try_into().unwrap_or(1);
+                    presented_at + (net_days * 86400)
+                }
+                _ => presented_at + 300,
+            };
+            if now_secs > due_at {
+                tracing::debug!(
+                    service = "auto_collector",
+                    invoice_id = id,
+                    "skipping overdue invoice"
+                );
+                continue;
+            }
+        }
+
         // Skip if we already submitted a collect tx for this invoice (check DB)
         if state
             .db
