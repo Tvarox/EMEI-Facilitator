@@ -145,8 +145,6 @@ pub async fn present_invoice(
     signer: UserSigner,
     Json(body): Json<PresentRequest>,
 ) -> Result<Json<TxResponse>, EmeiError> {
-    let issuer_address = signer.0.address();
-
     let calldata = IEMEIInvoice::presentCall {
         invoiceId: U256::from(body.invoice_id),
     }
@@ -159,23 +157,7 @@ pub async fn present_invoice(
 
     let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
 
-    // Insert real-time event
-    let _ = state
-        .db
-        .insert_event(&IndexedEvent {
-            event_type: "InvoicePresented".to_string(),
-            block_number: now_ts(),
-            tx_hash: tx_hash_str.clone(),
-            log_index: 0,
-            timestamp: now_ts(),
-            invoice_id: Some(body.invoice_id),
-            payer: None, // Will be enriched by indexer
-            issuer: Some(format!("0x{}", hex::encode(issuer_address))),
-            amount: None,
-            params: "{}".to_string(),
-            status: "confirmed".to_string(),
-        })
-        .await;
+    // Event will be confirmed by webhook/indexer — no optimistic insert needed
 
     Ok(Json(TxResponse {
         tx_hash: tx_hash_str,
@@ -188,8 +170,6 @@ pub async fn pay_invoice(
     signer: UserSigner,
     Json(body): Json<PayRequest>,
 ) -> Result<Json<TxResponse>, EmeiError> {
-    let payer_address = signer.0.address();
-
     let calldata = IEMEIInvoice::payCall {
         invoiceId: U256::from(body.invoice_id),
     }
@@ -202,23 +182,7 @@ pub async fn pay_invoice(
 
     let tx_hash_str = format!("0x{}", hex::encode(tx_hash));
 
-    // Insert real-time event
-    let _ = state
-        .db
-        .insert_event(&IndexedEvent {
-            event_type: "InvoicePaid".to_string(),
-            block_number: now_ts(),
-            tx_hash: tx_hash_str.clone(),
-            log_index: 0,
-            timestamp: now_ts(),
-            invoice_id: Some(body.invoice_id),
-            payer: Some(format!("0x{}", hex::encode(payer_address))),
-            issuer: None,
-            amount: None,
-            params: "{}".to_string(),
-            status: "confirmed".to_string(),
-        })
-        .await;
+    // Event will be confirmed by webhook/indexer — no optimistic insert needed
 
     Ok(Json(TxResponse {
         tx_hash: tx_hash_str,
